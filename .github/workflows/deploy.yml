@@ -24,10 +24,10 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
-      DEPLOY_HOST: ${{ vars.VPS_HOST }}
-      DEPLOY_PORT: ${{ vars.VPS_PORT || '22' }}
-      DEPLOY_USER: ${{ vars.VPS_USER }}
-      DEPLOY_ROOT: ${{ vars.VPS_DEPLOY_PATH || '/opt/sova' }}
+      DEPLOY_HOST: ${{ secrets.VPS_HOST }}
+      DEPLOY_PORT: ${{ secrets.VPS_PORT || '22' }}
+      DEPLOY_USER: ${{ secrets.VPS_USER }}
+      DEPLOY_ROOT: ${{ secrets.VPS_DEPLOY_PATH || '/opt/sova' }}
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: Check out the approved commit

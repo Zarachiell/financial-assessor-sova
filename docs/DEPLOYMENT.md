@@ -114,21 +114,16 @@ Se o SSH utilizar uma porta diferente de 22, o primeiro campo deve ser `[<ip-pub
 
 No repositório GitHub, abra `Settings -> Secrets and variables -> Actions`.
 
-Crie os repository secrets:
+Crie os repository secrets obrigatórios:
 
 ```text
 VPS_SSH_PRIVATE_KEY   conteúdo completo do arquivo privado sova-github-actions
 VPS_SSH_KNOWN_HOSTS  linha known_hosts criada acima
-```
-
-Crie as repository variables obrigatórias:
-
-```text
 VPS_HOST         IP público da VPS
 VPS_USER         deploy
 ```
 
-As variáveis abaixo são opcionais; o workflow já utiliza estes valores como padrão:
+Os secrets abaixo são opcionais; o workflow já utiliza estes valores como padrão:
 
 ```text
 VPS_PORT         22
