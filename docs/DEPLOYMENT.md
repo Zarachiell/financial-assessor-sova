@@ -16,7 +16,7 @@ push na main
 
 O deploy só ocorre quando o workflow `CI` termina com sucesso para um `push` na branch `main`. Também pode ser iniciado manualmente pela interface do GitHub, desde que a branch selecionada seja `main`.
 
-O workflow não envia o `.env` da aplicação para o GitHub. A configuração de produção permanece apenas na VPS em:
+O workflow monta o `.env` de produção usando GitHub Secrets e o envia diretamente para:
 
 ```text
 /opt/sova/shared/.env
@@ -63,9 +63,9 @@ Adicione o conteúdo de `sova-github-actions.pub` em:
 /home/deploy/.ssh/authorized_keys
 ```
 
-## 3. Criar o `.env` de produção
+## 3. Configurar o `.env` de produção
 
-Crie `/opt/sova/shared/.env` diretamente na VPS. Não use os valores fictícios de `.env.example`:
+Cadastre como repository secrets todos os valores abaixo. Não use os valores fictícios de `.env.example`:
 
 ```dotenv
 DATABASE_NAME=sova
@@ -87,11 +87,12 @@ SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
 ```
 
-Proteja o arquivo:
+O workflow cria ou atualiza `/opt/sova/shared/.env` com permissão `600`. Não é necessário criar esse arquivo manualmente.
+
+Para conferir a permissão depois do primeiro deploy:
 
 ```bash
-sudo chown deploy:deploy /opt/sova/shared/.env
-sudo chmod 600 /opt/sova/shared/.env
+stat -c '%U %G %a %n' /opt/sova/shared/.env
 ```
 
 O endereço HTTP por IP permite a validação inicial do canal real, mas não atende ao requisito de HTTPS definido em `SPEC.md`. Antes de trafegar informações financeiras reais, configure HTTPS.
@@ -130,7 +131,7 @@ VPS_PORT         22
 VPS_DEPLOY_PATH  /opt/sova
 ```
 
-Não cadastre `TWILIO_AUTH_TOKEN`, senha do PostgreSQL ou números pessoais no GitHub. Esses valores pertencem somente ao `.env` da VPS.
+Os Secrets são enviados somente ao arquivo de produção e não são incluídos no pacote versionado da aplicação nem impressos pelo workflow.
 
 ## 5. Primeiro deploy
 

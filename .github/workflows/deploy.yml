@@ -74,12 +74,68 @@ jobs:
             --exclude='backend/build' \
             -czf "$RUNNER_TEMP/sova-release.tar.gz" .
 
+      - name: Render production configuration
+        shell: bash
+        env:
+          DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          SOVA_HTTP_PORT: ${{ secrets.SOVA_HTTP_PORT }}
+          SOVA_HTTPS_PORT: ${{ secrets.SOVA_HTTPS_PORT }}
+          SOVA_ADDRESS: ${{ secrets.SOVA_ADDRESS }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_SENDER: ${{ secrets.TWILIO_WHATSAPP_SENDER }}
+          SOVA_HOUSEHOLD_NAME: ${{ secrets.SOVA_HOUSEHOLD_NAME }}
+          SOVA_USER_A_NAME: ${{ secrets.SOVA_USER_A_NAME }}
+          SOVA_USER_A_WHATSAPP: ${{ secrets.SOVA_USER_A_WHATSAPP }}
+          SOVA_USER_B_NAME: ${{ secrets.SOVA_USER_B_NAME }}
+          SOVA_USER_B_WHATSAPP: ${{ secrets.SOVA_USER_B_WHATSAPP }}
+        run: |
+          set -euo pipefail
+          umask 077
+          output="$RUNNER_TEMP/sova-production.env"
+          : > "$output"
+
+          write_secret() {
+            local name="$1"
+            local value="${!name}"
+            test -n "$value"
+            [[ "$value" != *$'\n'* ]]
+            [[ "$value" != *$'\r'* ]]
+            value="${value//\\/\\\\}"
+            value="${value//\'/\\\'}"
+            printf "%s='%s'\n" "$name" "$value" >> "$output"
+          }
+
+          required_secrets=(
+            DATABASE_NAME
+            DATABASE_USER
+            DATABASE_PASSWORD
+            SOVA_HTTP_PORT
+            SOVA_HTTPS_PORT
+            SOVA_ADDRESS
+            TWILIO_ACCOUNT_SID
+            TWILIO_AUTH_TOKEN
+            TWILIO_WHATSAPP_SENDER
+            SOVA_HOUSEHOLD_NAME
+            SOVA_USER_A_NAME
+            SOVA_USER_A_WHATSAPP
+            SOVA_USER_B_NAME
+            SOVA_USER_B_WHATSAPP
+          )
+
+          for secret_name in "${required_secrets[@]}"; do
+            write_secret "$secret_name"
+          done
+
       - name: Upload and activate the release
         shell: bash
         run: |
           set -euo pipefail
           release_id="${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           remote_archive="/tmp/sova-${release_id}.tar.gz"
+          remote_env="/tmp/sova-env-${release_id}"
           ssh_options=(
             -i "$HOME/.ssh/sova_deploy"
             -p "$DEPLOY_PORT"
@@ -95,31 +151,43 @@ jobs:
             "$RUNNER_TEMP/sova-release.tar.gz" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_archive}"
 
+          scp \
+            -i "$HOME/.ssh/sova_deploy" \
+            -P "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            "$RUNNER_TEMP/sova-production.env" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_env}"
+
           # Values expanded locally below are constrained by the validation step.
           # shellcheck disable=SC2029
           ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "bash -s -- '$DEPLOY_ROOT' '$release_id' '$remote_archive'" <<'REMOTE_SCRIPT'
+            "bash -s -- '$DEPLOY_ROOT' '$release_id' '$remote_archive' '$remote_env'" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           deploy_root="$1"
           release_id="$2"
           remote_archive="$3"
+          remote_env="$4"
           release_path="${deploy_root}/releases/${release_id}"
           shared_env="${deploy_root}/shared/.env"
+          next_env="${shared_env}.next-${release_id}"
 
-          test -f "$shared_env" || {
-            echo "Missing production configuration: $shared_env" >&2
-            exit 1
+          cleanup() {
+            rm -f "$remote_archive" "$remote_env" "$next_env"
           }
+          trap cleanup EXIT
+
           test ! -e "$release_path" || {
             echo "Release already exists: $release_path" >&2
             exit 1
           }
 
-          mkdir -p "${deploy_root}/releases"
+          mkdir -p "${deploy_root}/releases" "${deploy_root}/shared"
+          install -m 600 "$remote_env" "$next_env"
+          mv -f "$next_env" "$shared_env"
           mkdir "$release_path"
           tar -xzf "$remote_archive" -C "$release_path"
-          rm -f "$remote_archive"
           ln -s "$shared_env" "${release_path}/.env"
 
           cd "$release_path"
