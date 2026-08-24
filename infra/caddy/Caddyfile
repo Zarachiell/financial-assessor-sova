@@ -1,0 +1,14 @@
+{
+	admin off
+}
+
+{$SOVA_ADDRESS:http://localhost} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	reverse_proxy sova-api:8080
+}
