@@ -1,6 +1,7 @@
 package com.sova.delivery.http
 
 import com.sova.DatabaseHealth
+import com.sova.whatsapp.application.WhatsappDeliveryException
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -11,6 +12,8 @@ import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.forwardedheaders.ForwardedHeaders
+import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.path
@@ -22,7 +25,10 @@ import kotlinx.serialization.Serializable
 import org.slf4j.event.Level
 import java.util.UUID
 
-fun Application.configureHttp(database: DatabaseHealth) {
+fun Application.configureHttp(
+    database: DatabaseHealth,
+    whatsapp: WhatsappHttpDependencies? = null,
+) {
     install(CallId) {
         retrieveFromHeader(HttpHeaders.XRequestId)
         verify { it.length in 1..128 }
@@ -40,7 +46,17 @@ fun Application.configureHttp(database: DatabaseHealth) {
         json()
     }
 
+    install(ForwardedHeaders)
+    install(XForwardedHeaders)
+
     install(StatusPages) {
+        exception<WhatsappDeliveryException> { call, cause ->
+            call.application.environment.log.error("WhatsApp provider failure", cause)
+            call.respond(
+                status = HttpStatusCode.BadGateway,
+                message = ErrorResponse(error = "WHATSAPP_PROVIDER_UNAVAILABLE"),
+            )
+        }
         exception<Throwable> { call, cause ->
             call.application.environment.log.error("Unexpected request failure", cause)
             call.respond(
@@ -62,6 +78,8 @@ fun Application.configureHttp(database: DatabaseHealth) {
         get("/health") {
             call.respondReadiness(database)
         }
+
+        whatsapp?.let(::whatsappRoutes)
     }
 }
 
@@ -81,3 +99,6 @@ data class HealthResponse(
     val status: String,
     val components: Map<String, String>? = null,
 )
+
+@Serializable
+data class ErrorResponse(val error: String)

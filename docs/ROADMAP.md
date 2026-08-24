@@ -48,14 +48,15 @@ Receber e responder mensagens dos dois usuários autorizados.
 
 ### Entregáveis
 
-- [ ] endpoint `POST /webhooks/twilio/whatsapp`
-- [ ] validação `X-Twilio-Signature`
-- [ ] idempotência por MessageSid
-- [ ] persistência de inbound messages
-- [ ] lookup por número do WhatsApp
-- [ ] whitelist dos dois usuários
-- [ ] envio de resposta via Twilio
-- [ ] tratamento básico de erros
+- [x] endpoint `POST /webhooks/twilio/whatsapp`
+- [x] validação `X-Twilio-Signature`
+- [x] idempotência por MessageSid
+- [x] persistência de inbound messages
+- [x] lookup por número do WhatsApp
+- [x] normalização de celular brasileiro com ou sem o nono dígito
+- [x] whitelist dos dois usuários
+- [x] envio de resposta via Twilio
+- [x] tratamento básico de erros
 
 ### Definição de pronto
 

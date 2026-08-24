@@ -167,13 +167,25 @@ A IA será inicialmente externa para preservar RAM e CPU da máquina.
 
 Secrets não devem ser versionados.
 
-Variáveis esperadas futuramente:
+Variáveis utilizadas pelo backend nesta fase:
 
 ```text
 DATABASE_URL
+DATABASE_USER
+DATABASE_PASSWORD
 TWILIO_ACCOUNT_SID
 TWILIO_AUTH_TOKEN
 TWILIO_WHATSAPP_SENDER
+SOVA_HOUSEHOLD_NAME
+SOVA_USER_A_NAME
+SOVA_USER_A_WHATSAPP
+SOVA_USER_B_NAME
+SOVA_USER_B_WHATSAPP
+```
+
+Variáveis previstas para a fase de IA:
+
+```text
 GROQ_API_KEY
 SOVA_AI_PROVIDER
 ```
@@ -220,11 +232,28 @@ Copie `.env.example` para `.env` quando precisar alterar os padrões. Não versi
 
 - use uma senha forte em `DATABASE_PASSWORD`;
 - configure `SOVA_ADDRESS` com o domínio público;
+- substitua todas as configurações locais da Twilio e dos dois usuários;
 - exponha `SOVA_HTTP_PORT=80` e `SOVA_HTTPS_PORT=443` para o Caddy emitir e renovar certificados HTTPS automaticamente.
+
+### WhatsApp / Twilio
+
+O startup provisiona um household e exatamente dois usuários autorizados a partir das variáveis `SOVA_HOUSEHOLD_NAME`, `SOVA_USER_A_*` e `SOVA_USER_B_*`. Números anteriormente provisionados que não fazem mais parte dessa configuração são desativados.
+
+Para identidades móveis brasileiras, o lookup trata os formatos com e sem o nono dígito como o mesmo usuário. O endereço bruto recebido da Twilio continua preservado nas mensagens para auditoria; a equivalência é usada somente na autorização do remetente.
+
+Configure na Twilio o webhook:
+
+```text
+POST https://<seu-dominio>/webhooks/twilio/whatsapp
+```
+
+O endpoint exige `application/x-www-form-urlencoded`, valida `X-Twilio-Signature` e aceita somente as duas identidades ativas. Os valores padrão do Compose são fictícios e existem apenas para que a stack local inicialize; eles não enviam mensagens reais.
+
+Um sender da Twilio possui uma configuração principal de webhook inbound. Se o número já atende outro bot, não substitua essa URL diretamente: use um roteador compartilhado ou um sender separado para evitar desviar as mensagens da aplicação existente.
 
 ### Backend sem Docker
 
-Com JDK 21 e um PostgreSQL acessível, exporte `DATABASE_URL`, `DATABASE_USER` e `DATABASE_PASSWORD` e execute:
+Com JDK 21 e um PostgreSQL acessível, exporte `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD` e todas as variáveis Twilio/provisioning listadas em `.env.example`. Depois execute:
 
 ```bash
 cd backend
@@ -242,10 +271,12 @@ cd backend
 
 O artefato executável é gerado em `backend/build/libs/sova-api.jar`.
 
-### CI
+### CI e deploy
 
 O workflow em `.github/workflows/ci.yml` executa os testes com JDK 21, gera o fat JAR e sobe os três containers para validar o endpoint de saúde através do Caddy.
 
+Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.yml` envia exatamente o commit aprovado para a VPS e ativa uma nova release com Docker Compose. O bootstrap da VPS, as variáveis e os secrets necessários estão descritos em [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 ## Status
 
-Fase 0 — Bootstrap implementada. As funcionalidades de WhatsApp e do domínio financeiro permanecem nas fases seguintes do roadmap.
+Fase 1 — WhatsApp textual implementada e validada automaticamente. A validação manual no Twilio Sandbox com os dois números reais permanece pendente. IA e domínio financeiro continuam fora do escopo até as fases seguintes.

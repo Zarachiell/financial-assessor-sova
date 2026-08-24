@@ -32,6 +32,40 @@ jobs:
         run: docker compose up --detach --build --wait
       - name: Verify API through Caddy
         run: curl --fail --show-error http://localhost:8080/health
+      - name: Verify signed Twilio webhook security through Caddy
+        shell: bash
+        run: |
+          url='http://localhost:8080/webhooks/twilio/whatsapp'
+          account_sid='AC00000000000000000000000000000000'
+          auth_token='local_test_auth_token'
+          from='whatsapp:+15550000009'
+          to='whatsapp:+15550000000'
+          message_sid='SM-CI-UNKNOWN'
+          signed_content="${url}AccountSid${account_sid}BodypingFrom${from}MessageSid${message_sid}NumMedia0To${to}"
+          signature="$(printf '%s' "$signed_content" | openssl dgst -sha1 -hmac "$auth_token" -binary | base64)"
+
+          curl --fail --show-error \
+            --request POST "$url" \
+            --header "X-Twilio-Signature: $signature" \
+            --data-urlencode "AccountSid=$account_sid" \
+            --data-urlencode "Body=ping" \
+            --data-urlencode "From=$from" \
+            --data-urlencode "MessageSid=$message_sid" \
+            --data-urlencode "NumMedia=0" \
+            --data-urlencode "To=$to"
+
+          invalid_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST "$url" \
+            --header 'X-Twilio-Signature: invalid' \
+            --data-urlencode "AccountSid=$account_sid" \
+            --data-urlencode "Body=ping" \
+            --data-urlencode "From=$from" \
+            --data-urlencode "MessageSid=SM-CI-INVALID" \
+            --data-urlencode "NumMedia=0" \
+            --data-urlencode "To=$to")"
+
+          test "$invalid_status" = '403'
+          test "$(docker compose exec -T postgres psql -U sova -d sova -tAc 'SELECT count(*) FROM whatsapp_messages;')" = '0'
       - name: Show service logs on failure
         if: failure()
         run: docker compose logs

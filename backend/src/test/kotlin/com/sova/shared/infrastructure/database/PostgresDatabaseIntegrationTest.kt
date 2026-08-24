@@ -35,7 +35,7 @@ class PostgresDatabaseIntegrationTest {
                         "select count(*) from flyway_schema_history where success",
                     ).use { result ->
                         assertTrue(result.next())
-                        assertEquals(1, result.getInt(1))
+                        assertEquals(3, result.getInt(1))
                     }
                 }
             }
