@@ -4,6 +4,8 @@ import com.sova.finance.domain.Account
 import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CashFlowEntry
+import com.sova.finance.domain.CashFlowProjection
+import com.sova.finance.domain.CashFlowProjectionCalculator
 import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
@@ -15,8 +17,11 @@ import com.sova.finance.domain.FinancialSource
 import com.sova.finance.domain.Money
 import com.sova.finance.domain.SourceReferenceId
 import com.sova.finance.domain.Transaction
+import java.math.BigDecimal
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 
 data class CreateAccountCommand(
@@ -60,10 +65,47 @@ data class CreateCashFlowEntryCommand(
     val money: Money,
     val currency: Currency = Currency.BRL,
     val description: FinancialDescription,
-    val categoryId: UUID,
+    val accountId: UUID? = null,
+    val categoryId: UUID? = null,
+    val recurrence: CashFlowRecurrence = CashFlowRecurrence.ONCE,
     val startDate: LocalDate,
+    val endDate: LocalDate? = null,
+    val dayOfMonth: Int? = null,
     val source: FinancialSource,
     val sourceReferenceId: SourceReferenceId? = null,
+) {
+    init {
+        require(endDate == null || !endDate.isBefore(startDate)) {
+            "Cash flow end date must not be before its start date"
+        }
+        when (recurrence) {
+            CashFlowRecurrence.ONCE -> require(dayOfMonth == null) {
+                "One-time cash flow entries must not define a day of month"
+            }
+            CashFlowRecurrence.MONTHLY -> require(dayOfMonth in 1..31) {
+                "Monthly cash flow entries require a day of month between 1 and 31"
+            }
+        }
+    }
+}
+
+data class CashFlowEntryFilters(
+    val type: FinancialEntryType? = null,
+    val active: Boolean? = null,
+    val from: LocalDate? = null,
+    val to: LocalDate? = null,
+    val accountId: UUID? = null,
+) {
+    init {
+        require(from == null || to == null || !from.isAfter(to)) {
+            "Cash flow period start must not be after its end"
+        }
+    }
+}
+
+data class GetCashFlowProjectionQuery(
+    val targetDate: LocalDate,
+    val accountId: UUID? = null,
 )
 
 data class Creation<T>(
@@ -87,6 +129,9 @@ enum class FinancialRejection {
     CATEGORY_INACTIVE,
     CATEGORY_TYPE_MISMATCH,
     CURRENCY_MISMATCH,
+    CASH_FLOW_ENTRY_NOT_FOUND,
+    INVALID_PROJECTION_TARGET,
+    PROJECTION_HORIZON_EXCEEDED,
     PERSISTENCE_CONFLICT,
 }
 
@@ -131,14 +176,25 @@ interface FinancialRepository {
 
     suspend fun insertCashFlowEntry(entry: CashFlowEntry): Boolean
 
-    suspend fun listCashFlowEntries(householdId: UUID): List<CashFlowEntry>
+    suspend fun findCashFlowEntry(householdId: UUID, entryId: UUID): CashFlowEntry?
+
+    suspend fun deactivateCashFlowEntry(householdId: UUID, entryId: UUID, updatedAt: Instant): Boolean
+
+    suspend fun listCashFlowEntries(householdId: UUID, filters: CashFlowEntryFilters): List<CashFlowEntry>
 }
 
 class FinancialApplicationService(
     private val repository: FinancialRepository,
     private val clock: Clock = Clock.systemUTC(),
+    private val maxProjectionMonths: Int = DEFAULT_MAX_PROJECTION_MONTHS,
+    private val householdZone: ZoneId = ZoneId.of(DEFAULT_HOUSEHOLD_TIME_ZONE),
+    private val projectionCalculator: CashFlowProjectionCalculator = CashFlowProjectionCalculator(),
     private val idGenerator: () -> UUID = UUID::randomUUID,
 ) {
+    init {
+        require(maxProjectionMonths > 0) { "Maximum projection months must be positive" }
+    }
+
     suspend fun createAccount(
         context: FinancialContext,
         command: CreateAccountCommand,
@@ -255,10 +311,23 @@ class FinancialApplicationService(
         if (!repository.isActiveMember(context)) return unauthorized()
         findExistingCashFlowEntry(context, command)?.let { return success(Creation(it, created = false)) }
 
-        val category = repository.findCategory(context.householdId, command.categoryId)
-            ?: return rejected(FinancialRejection.CATEGORY_NOT_FOUND)
-        if (!category.active) return rejected(FinancialRejection.CATEGORY_INACTIVE)
-        if (category.type != command.type) return rejected(FinancialRejection.CATEGORY_TYPE_MISMATCH)
+        val account = command.accountId?.let { accountId ->
+            repository.findAccount(context.householdId, accountId)
+                ?: return rejected(FinancialRejection.ACCOUNT_NOT_FOUND)
+        }
+        if (account != null && !account.active) return rejected(FinancialRejection.ACCOUNT_INACTIVE)
+        if (account != null && account.currency != command.currency) {
+            return rejected(FinancialRejection.CURRENCY_MISMATCH)
+        }
+
+        val category = command.categoryId?.let { categoryId ->
+            repository.findCategory(context.householdId, categoryId)
+                ?: return rejected(FinancialRejection.CATEGORY_NOT_FOUND)
+        }
+        if (category != null && !category.active) return rejected(FinancialRejection.CATEGORY_INACTIVE)
+        if (category != null && category.type != command.type) {
+            return rejected(FinancialRejection.CATEGORY_TYPE_MISMATCH)
+        }
 
         val now = clock.instant()
         val entry = CashFlowEntry(
@@ -269,10 +338,12 @@ class FinancialApplicationService(
             money = command.money,
             currency = command.currency,
             description = command.description,
-            categoryId = category.id,
-            recurrence = CashFlowRecurrence.ONCE,
+            accountId = account?.id,
+            categoryId = category?.id,
+            recurrence = command.recurrence,
             startDate = command.startDate,
-            endDate = null,
+            endDate = command.endDate,
+            dayOfMonth = command.dayOfMonth,
             active = true,
             source = command.source,
             sourceReferenceId = command.sourceReferenceId,
@@ -285,9 +356,65 @@ class FinancialApplicationService(
         return rejected(FinancialRejection.PERSISTENCE_CONFLICT)
     }
 
-    suspend fun listCashFlowEntries(context: FinancialContext): FinancialResult<List<CashFlowEntry>> {
+    suspend fun deactivateCashFlowEntry(
+        context: FinancialContext,
+        entryId: UUID,
+    ): FinancialResult<CashFlowEntry> {
         if (!repository.isActiveMember(context)) return unauthorized()
-        return success(repository.listCashFlowEntries(context.householdId))
+        val entry = repository.findCashFlowEntry(context.householdId, entryId)
+            ?: return rejected(FinancialRejection.CASH_FLOW_ENTRY_NOT_FOUND)
+        if (!entry.active) return success(entry)
+
+        val updatedAt = clock.instant()
+        if (!repository.deactivateCashFlowEntry(context.householdId, entryId, updatedAt)) {
+            return rejected(FinancialRejection.PERSISTENCE_CONFLICT)
+        }
+        return success(entry.copy(active = false, updatedAt = updatedAt))
+    }
+
+    suspend fun listCashFlowEntries(
+        context: FinancialContext,
+        filters: CashFlowEntryFilters = CashFlowEntryFilters(),
+    ): FinancialResult<List<CashFlowEntry>> {
+        if (!repository.isActiveMember(context)) return unauthorized()
+        return success(repository.listCashFlowEntries(context.householdId, filters))
+    }
+
+    suspend fun getCashFlowProjection(
+        context: FinancialContext,
+        query: GetCashFlowProjectionQuery,
+    ): FinancialResult<CashFlowProjection> {
+        if (!repository.isActiveMember(context)) return unauthorized()
+        val today = LocalDate.now(clock.withZone(householdZone))
+        if (query.targetDate.isBefore(today)) return rejected(FinancialRejection.INVALID_PROJECTION_TARGET)
+        if (query.targetDate.isAfter(today.plusMonths(maxProjectionMonths.toLong()))) {
+            return rejected(FinancialRejection.PROJECTION_HORIZON_EXCEEDED)
+        }
+
+        query.accountId?.let { accountId ->
+            val account = repository.findAccount(context.householdId, accountId)
+                ?: return rejected(FinancialRejection.ACCOUNT_NOT_FOUND)
+            if (!account.active) return rejected(FinancialRejection.ACCOUNT_INACTIVE)
+        }
+        val currentBalance = repository.listTransactions(
+            context.householdId,
+            TransactionFilters(accountId = query.accountId),
+        ).fold(BigDecimal.ZERO) { balance, transaction ->
+            when (transaction.type) {
+                FinancialEntryType.INCOME -> balance + transaction.money.amount
+                FinancialEntryType.EXPENSE -> balance - transaction.money.amount
+            }
+        }
+        val entries = repository.listCashFlowEntries(
+            context.householdId,
+            CashFlowEntryFilters(
+                active = true,
+                from = today,
+                to = query.targetDate,
+                accountId = query.accountId,
+            ),
+        )
+        return success(projectionCalculator.calculate(currentBalance, entries, today, query.targetDate))
     }
 
     private suspend fun findExistingTransaction(
@@ -309,4 +436,9 @@ class FinancialApplicationService(
     private fun rejected(reason: FinancialRejection): FinancialResult.Rejected = FinancialResult.Rejected(reason)
 
     private fun unauthorized(): FinancialResult.Rejected = rejected(FinancialRejection.UNAUTHORIZED_CONTEXT)
+
+    private companion object {
+        const val DEFAULT_MAX_PROJECTION_MONTHS = 24
+        const val DEFAULT_HOUSEHOLD_TIME_ZONE = "America/Fortaleza"
+    }
 }

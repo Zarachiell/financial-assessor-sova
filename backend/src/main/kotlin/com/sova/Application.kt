@@ -42,7 +42,10 @@ fun main() {
             ),
         )
     }
-    val financialService = FinancialApplicationService(PostgresFinancialRepository(database))
+    val financialService = FinancialApplicationService(
+        repository = PostgresFinancialRepository(database),
+        maxProjectionMonths = config.cashFlow.maxProjectionMonths,
+    )
     val catalogOwner = runBlocking {
         whatsappRepository.findActiveUser(WhatsappAddress(config.household.users.first().whatsappAddress))
             ?: error("Configured catalog owner was not provisioned")

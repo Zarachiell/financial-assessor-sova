@@ -1,5 +1,6 @@
 package com.sova.finance.infrastructure.persistence
 
+import com.sova.finance.application.CashFlowEntryFilters
 import com.sova.finance.application.FinancialRepository
 import com.sova.finance.application.TransactionFilters
 import com.sova.finance.domain.Account
@@ -25,6 +26,7 @@ import org.jooq.Record
 import org.jooq.SQLDialect
 import org.jooq.impl.DSL
 import java.math.BigDecimal
+import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -244,23 +246,26 @@ class PostgresFinancialRepository(
         sql.execute(
             """
             INSERT INTO cash_flow_entries
-                (id, household_id, created_by_user_id, type, amount, currency, description, category_id,
-                 recurrence, start_date, end_date, active, source, source_reference_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                (id, household_id, created_by_user_id, account_id, category_id, type, amount, currency,
+                 description, recurrence, start_date, end_date, day_of_month, active, source,
+                 source_reference_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     CAST(? AS TIMESTAMPTZ), CAST(? AS TIMESTAMPTZ))
             ON CONFLICT DO NOTHING
             """.trimIndent(),
             entry.id,
             entry.householdId,
             entry.createdByUserId,
+            entry.accountId,
+            entry.categoryId,
             entry.type.name,
             entry.money.amount,
             entry.currency.name,
             entry.description.value,
-            entry.categoryId,
             entry.recurrence.name,
             entry.startDate,
             entry.endDate,
+            entry.dayOfMonth,
             entry.active,
             entry.source.name,
             entry.sourceReferenceId?.value,
@@ -269,15 +274,69 @@ class PostgresFinancialRepository(
         ) == 1
     }
 
-    override suspend fun listCashFlowEntries(householdId: UUID): List<CashFlowEntry> = query { sql ->
+    override suspend fun findCashFlowEntry(householdId: UUID, entryId: UUID): CashFlowEntry? = query { sql ->
+        sql.fetchOne(
+            "SELECT * FROM cash_flow_entries WHERE household_id = ? AND id = ?",
+            householdId,
+            entryId,
+        )?.toCashFlowEntry()
+    }
+
+    override suspend fun deactivateCashFlowEntry(
+        householdId: UUID,
+        entryId: UUID,
+        updatedAt: Instant,
+    ): Boolean = query { sql ->
+        sql.execute(
+            """
+            UPDATE cash_flow_entries
+            SET active = FALSE, updated_at = CAST(? AS TIMESTAMPTZ)
+            WHERE household_id = ? AND id = ? AND active
+            """.trimIndent(),
+            updatedAt.toString(),
+            householdId,
+            entryId,
+        ) == 1
+    }
+
+    override suspend fun listCashFlowEntries(
+        householdId: UUID,
+        filters: CashFlowEntryFilters,
+    ): List<CashFlowEntry> = query { sql ->
+        val conditions = mutableListOf("household_id = ?")
+        val parameters = mutableListOf<Any>(householdId)
+        filters.type?.let {
+            conditions += "type = ?"
+            parameters += it.name
+        }
+        filters.active?.let {
+            conditions += "active = ?"
+            parameters += it
+        }
+        filters.from?.let {
+            conditions +=
+                "((recurrence = 'ONCE' AND start_date >= ?) OR " +
+                "(recurrence = 'MONTHLY' AND (end_date IS NULL OR end_date >= ?)))"
+            parameters += it
+            parameters += it
+        }
+        filters.to?.let {
+            conditions += "start_date <= ?"
+            parameters += it
+        }
+        filters.accountId?.let {
+            conditions += "account_id = ?"
+            parameters += it
+        }
+
         sql.fetch(
             """
             SELECT *
             FROM cash_flow_entries
-            WHERE household_id = ?
+            WHERE ${conditions.joinToString(" AND ")}
             ORDER BY start_date, created_at, id
             """.trimIndent(),
-            householdId,
+            *parameters.toTypedArray(),
         ).map { it.toCashFlowEntry() }
     }
 
@@ -333,10 +392,12 @@ private fun Record.toCashFlowEntry(): CashFlowEntry = CashFlowEntry(
     money = Money.of(required("amount", BigDecimal::class.java)),
     currency = Currency.valueOf(required("currency", String::class.java)),
     description = FinancialDescription.of(required("description", String::class.java)),
-    categoryId = required("category_id", UUID::class.java),
+    accountId = get("account_id", UUID::class.java),
+    categoryId = get("category_id", UUID::class.java),
     recurrence = CashFlowRecurrence.valueOf(required("recurrence", String::class.java)),
     startDate = required("start_date", LocalDate::class.java),
     endDate = get("end_date", LocalDate::class.java),
+    dayOfMonth = get("day_of_month", Int::class.javaObjectType),
     active = required("active", Boolean::class.java),
     source = FinancialSource.valueOf(required("source", String::class.java)),
     sourceReferenceId = get("source_reference_id", String::class.java)?.let(SourceReferenceId::of),

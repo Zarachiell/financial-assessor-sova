@@ -37,7 +37,20 @@ class PostgresDatabaseIntegrationTest {
                         "select count(*) from flyway_schema_history where success",
                     ).use { result ->
                         assertTrue(result.next())
-                        assertEquals(4, result.getInt(1))
+                        assertEquals(5, result.getInt(1))
+                    }
+
+                    statement.executeQuery(
+                        """
+                        SELECT count(*)
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cash_flow_entries'
+                          AND column_name IN ('account_id', 'day_of_month')
+                        """.trimIndent(),
+                    ).use { result ->
+                        assertTrue(result.next())
+                        assertEquals(2, result.getInt(1))
                     }
                 }
             }

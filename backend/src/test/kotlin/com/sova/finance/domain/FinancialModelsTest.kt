@@ -45,7 +45,7 @@ class FinancialModelsTest {
     }
 
     @Test
-    fun `cash flow entry is punctual and preserves civil and technical dates`() {
+    fun `one-time cash flow entry preserves civil and technical dates`() {
         val householdId = UUID.randomUUID()
         val userId = UUID.randomUUID()
         val createdAt = Instant.parse("2026-08-24T20:00:00Z")
@@ -77,7 +77,43 @@ class FinancialModelsTest {
         assertNull(entry.endDate)
 
         assertFailsWith<IllegalArgumentException> {
-            entry.copy(endDate = startDate)
+            entry.copy(endDate = startDate.minusDays(1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            entry.copy(dayOfMonth = 1)
+        }
+    }
+
+    @Test
+    fun `monthly cash flow requires a valid day and ordered active period`() {
+        val entry = CashFlowEntry(
+            id = UUID.randomUUID(),
+            householdId = UUID.randomUUID(),
+            createdByUserId = UUID.randomUUID(),
+            type = FinancialEntryType.INCOME,
+            money = Money.of(BigDecimal("8000.00")),
+            currency = Currency.BRL,
+            description = FinancialDescription.of("Salário"),
+            recurrence = CashFlowRecurrence.MONTHLY,
+            startDate = LocalDate.parse("2026-09-01"),
+            endDate = LocalDate.parse("2027-08-31"),
+            dayOfMonth = 5,
+            active = true,
+            source = FinancialSource.WHATSAPP_TEXT,
+            sourceReferenceId = SourceReferenceId.of("SM-SALARY"),
+            createdAt = Instant.parse("2026-08-25T12:00:00Z"),
+            updatedAt = Instant.parse("2026-08-25T12:00:00Z"),
+        )
+
+        assertEquals(5, entry.dayOfMonth)
+        assertEquals(CashFlowRecurrence.MONTHLY, entry.recurrence)
+        listOf(null, 0, 32).forEach { invalidDay ->
+            assertFailsWith<IllegalArgumentException> {
+                entry.copy(dayOfMonth = invalidDay)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            entry.copy(endDate = entry.startDate.minusDays(1))
         }
     }
 }

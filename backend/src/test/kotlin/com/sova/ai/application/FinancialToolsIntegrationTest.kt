@@ -21,6 +21,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.math.BigDecimal
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -114,6 +117,60 @@ class FinancialToolsIntegrationTest {
                 fixture.userA,
                 "SM-SUMMARY",
             ).json()
+            val monthlyExpense = fixture.dispatch(
+                "create_cash_flow_entry",
+                """
+                {
+                  "type":"EXPENSE",
+                  "amount":2000,
+                  "description":"aluguel",
+                  "recurrence":"MONTHLY",
+                  "startDate":"2026-08-25",
+                  "dayOfMonth":10,
+                  "category":"Moradia"
+                }
+                """.trimIndent(),
+                fixture.userA,
+                "SM-RENT",
+            ).json()
+            val duplicateMonthlyExpense = fixture.dispatch(
+                "create_cash_flow_entry",
+                """
+                {
+                  "type":"EXPENSE",
+                  "amount":2000,
+                  "description":"aluguel",
+                  "recurrence":"MONTHLY",
+                  "startDate":"2026-08-25",
+                  "dayOfMonth":10,
+                  "category":"Moradia"
+                }
+                """.trimIndent(),
+                fixture.userA,
+                "SM-RENT",
+            ).json()
+            val monthlyIncome = fixture.dispatch(
+                "create_cash_flow_entry",
+                """
+                {
+                  "type":"INCOME",
+                  "amount":8000,
+                  "description":"salário",
+                  "recurrence":"MONTHLY",
+                  "startDate":"2026-08-25",
+                  "dayOfMonth":5,
+                  "category":"Salário"
+                }
+                """.trimIndent(),
+                fixture.userB,
+                "SM-SALARY",
+            ).json()
+            val projection = fixture.dispatch(
+                "get_cash_flow_projection",
+                """{"targetDate":"2026-09-25"}""",
+                fixture.userA,
+                "SM-PROJECTION",
+            ).json()
 
             assertEquals(BigDecimal("468.00"), balance.getValue("balance").jsonPrimitive.content.toBigDecimal())
             assertEquals(BigDecimal("32.00"), expenses.getValue("total").jsonPrimitive.content.toBigDecimal())
@@ -124,6 +181,19 @@ class FinancialToolsIntegrationTest {
             assertFalse(listed.toString().contains("userId"))
             assertFalse(listed.toString().contains("accountId"))
             assertEquals(2, summary.getValue("categories").jsonArray.size)
+            assertTrue(monthlyExpense.getValue("created").jsonPrimitive.boolean)
+            assertFalse(duplicateMonthlyExpense.getValue("created").jsonPrimitive.boolean)
+            assertTrue(monthlyIncome.getValue("created").jsonPrimitive.boolean)
+            assertEquals(
+                BigDecimal("6468.00"),
+                projection.getValue("projectedBalance").jsonPrimitive.content.toBigDecimal(),
+            )
+            assertEquals(BigDecimal("8000.00"), projection.getValue("expectedIncome").jsonPrimitive.content.toBigDecimal())
+            assertEquals(
+                BigDecimal("2000.00"),
+                projection.getValue("expectedExpenses").jsonPrimitive.content.toBigDecimal(),
+            )
+            assertEquals(2, projection.getValue("occurrenceCount").jsonPrimitive.content.toInt())
 
             val transactions = fixture.service.listTransactions(fixture.userA).successValue()
             assertEquals(2, transactions.size)
@@ -132,6 +202,10 @@ class FinancialToolsIntegrationTest {
             assertTrue(transactions.all { it.source == FinancialSource.WHATSAPP_TEXT })
             assertEquals(setOf("SM-EXPENSE", "SM-INCOME"), transactions.mapNotNull { it.sourceReferenceId?.value }.toSet())
             assertEquals(setOf(FinancialEntryType.EXPENSE, FinancialEntryType.INCOME), transactions.map { it.type }.toSet())
+            val cashFlowEntries = fixture.service.listCashFlowEntries(fixture.userA).successValue()
+            assertEquals(2, cashFlowEntries.size)
+            assertEquals(setOf(fixture.userA.userId, fixture.userB.userId), cashFlowEntries.map { it.createdByUserId }.toSet())
+            assertTrue(cashFlowEntries.all { it.householdId == fixture.userA.householdId })
         }
     }
 
@@ -195,7 +269,7 @@ private suspend fun withFixture(block: suspend (FinancialToolFixture) -> Unit) {
         val userB = requireNotNull(whatsapp.findActiveUser(userBAddress)).let {
             FinancialContext(it.householdId, it.userId)
         }
-        val service = FinancialApplicationService(PostgresFinancialRepository(database))
+        val service = FinancialApplicationService(PostgresFinancialRepository(database), PHASE_CLOCK)
         DefaultFinancialCatalogProvisioner(service).provision(userA)
         val registry = LocalToolRegistry(financialLocalTools(service))
         block(FinancialToolFixture(service, LocalToolDispatcher(registry), userA, userB))
@@ -222,3 +296,5 @@ private data class FinancialToolFixture(
 private fun ToolDispatchResult.json() = Json.parseToJsonElement(content).jsonObject
 
 private fun <T> FinancialResult<T>.successValue(): T = (this as FinancialResult.Success<T>).value
+
+private val PHASE_CLOCK = Clock.fixed(Instant.parse("2026-08-25T12:00:00Z"), ZoneOffset.UTC)

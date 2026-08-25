@@ -278,4 +278,4 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 ## Status
 
-Fase 3 — Groq + local tool calling implementada e validada localmente. Mensagens textuais do WhatsApp passam por um `AiProvider`, mas toda consulta, cálculo e persistência financeira é executada por tools locais com contexto autenticado. Os testes automatizados usam provider fake e cobrem despesas, receitas, saldo, gastos, transações, categorias, idempotência e falhas seguras sem chamar Groq ou Twilio reais.
+Fase 4 — fluxo de caixa implementada e validada localmente. Além das operações financeiras já disponíveis pelo WhatsApp, o Sova registra receitas e despesas futuras `ONCE`/`MONTHLY` e calcula projeções determinísticas no backend. Os testes automatizados usam provider fake e cobrem recorrência, meses curtos, horizonte, filtros, desativação, isolamento, autoria e idempotência sem chamar Groq ou Twilio reais.

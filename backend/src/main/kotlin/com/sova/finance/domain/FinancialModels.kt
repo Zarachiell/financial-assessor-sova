@@ -83,6 +83,7 @@ enum class FinancialSource {
 
 enum class CashFlowRecurrence {
     ONCE,
+    MONTHLY,
 }
 
 data class FinancialContext(
@@ -141,10 +142,12 @@ data class CashFlowEntry(
     val money: Money,
     val currency: Currency,
     val description: FinancialDescription,
-    val categoryId: UUID,
+    val accountId: UUID? = null,
+    val categoryId: UUID? = null,
     val recurrence: CashFlowRecurrence,
     val startDate: LocalDate,
     val endDate: LocalDate?,
+    val dayOfMonth: Int? = null,
     val active: Boolean,
     val source: FinancialSource,
     val sourceReferenceId: SourceReferenceId?,
@@ -153,8 +156,17 @@ data class CashFlowEntry(
 ) {
     init {
         require(currency == Currency.BRL) { "Only BRL is supported" }
-        require(recurrence == CashFlowRecurrence.ONCE) { "Only one-time cash flow entries are supported" }
-        require(endDate == null) { "One-time cash flow entries must not have an end date" }
+        require(endDate == null || !endDate.isBefore(startDate)) {
+            "Cash flow end date must not be before its start date"
+        }
+        when (recurrence) {
+            CashFlowRecurrence.ONCE -> require(dayOfMonth == null) {
+                "One-time cash flow entries must not define a day of month"
+            }
+            CashFlowRecurrence.MONTHLY -> require(dayOfMonth in 1..31) {
+                "Monthly cash flow entries require a day of month between 1 and 31"
+            }
+        }
     }
 }
 

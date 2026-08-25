@@ -93,6 +93,24 @@ class WhatsappAiFinancialIntegrationTest {
                         """{"from":"2026-08-01","to":"2026-08-31","category":"Restaurante"}""",
                     ),
                     answer("Não há despesas de restaurante registradas neste mês."),
+                    tool(
+                        "rent",
+                        "create_cash_flow_entry",
+                        """{"type":"EXPENSE","amount":2000,"description":"aluguel","category":"Moradia","recurrence":"MONTHLY","startDate":"2026-08-25","dayOfMonth":10}""",
+                    ),
+                    answer("Aluguel mensal de R$ 2.000,00 registrado para todo dia 10."),
+                    tool(
+                        "salary",
+                        "create_cash_flow_entry",
+                        """{"type":"INCOME","amount":8000,"description":"salário","category":"Salário","recurrence":"MONTHLY","startDate":"2026-08-25","dayOfMonth":5}""",
+                    ),
+                    answer("Receita mensal de R$ 8.000,00 registrada para todo dia 5."),
+                    tool(
+                        "projection",
+                        "get_cash_flow_projection",
+                        """{"targetDate":"2026-09-25"}""",
+                    ),
+                    answer("Teremos uma projeção de R$ 6.468,00 em 25 de setembro."),
                 ),
             )
             val conversation = AiConversationOrchestrator(
@@ -116,13 +134,16 @@ class WhatsappAiFinancialIntegrationTest {
             handler.handle(message("SM-EXPENSES", userAAddress, "Quanto gastamos este mês?"))
             handler.handle(message("SM-BALANCE", userBAddress, "Qual nosso saldo?"))
             handler.handle(message("SM-RESTAURANT", userAAddress, "Quanto gastamos com restaurante?"))
+            handler.handle(message("SM-RENT", userAAddress, "Todo dia 10 pago R$ 2.000 de aluguel"))
+            handler.handle(message("SM-SALARY", userBAddress, "Recebo R$ 8.000 todo dia 5"))
+            handler.handle(message("SM-PROJECTION", userAAddress, "Quanto teremos no dia 25?"))
             val duplicate = handler.handle(message("SM-EXPENSE", userAAddress, "Gastei 32 reais no almoço hoje"))
 
             assertIs<WhatsappHandlingResult.Processed>(expenseResult)
             assertIs<WhatsappHandlingResult.Processed>(incomeResult)
             assertIs<WhatsappHandlingResult.Duplicate>(duplicate)
-            assertEquals(5, sender.messages.size)
-            assertEquals(10, provider.requests.size)
+            assertEquals(8, sender.messages.size)
+            assertEquals(16, provider.requests.size)
             assertEquals(
                 listOf(
                     "Despesa de R$ 32,00 registrada em Alimentação.",
@@ -130,6 +151,9 @@ class WhatsappAiFinancialIntegrationTest {
                     "Gastamos R$ 32,00 neste mês.",
                     "Nosso saldo registrado é R$ 468,00.",
                     "Não há despesas de restaurante registradas neste mês.",
+                    "Aluguel mensal de R$ 2.000,00 registrado para todo dia 10.",
+                    "Receita mensal de R$ 8.000,00 registrada para todo dia 5.",
+                    "Teremos uma projeção de R$ 6.468,00 em 25 de setembro.",
                 ),
                 sender.messages.map { it.second },
             )
@@ -140,6 +164,12 @@ class WhatsappAiFinancialIntegrationTest {
             assertEquals(2, transactions.size)
             assertEquals(setOf(userA.userId, userB.userId), transactions.map { it.createdByUserId }.toSet())
             assertTrue(transactions.all { it.householdId == userA.householdId })
+            val cashFlowEntries = financialService.listCashFlowEntries(
+                FinancialContext(userA.householdId, userA.userId),
+            ).successValue()
+            assertEquals(2, cashFlowEntries.size)
+            assertEquals(setOf(userA.userId, userB.userId), cashFlowEntries.map { it.createdByUserId }.toSet())
+            assertTrue(cashFlowEntries.all { it.householdId == userA.householdId })
 
             val toolResults = provider.requests.flatMap { request ->
                 request.messages.filter { it.role == AiMessageRole.TOOL }.mapNotNull { it.content }
@@ -149,6 +179,9 @@ class WhatsappAiFinancialIntegrationTest {
             assertTrue(toolResults.any { it.contains("\"balance\":468.00") })
             assertTrue(toolResults.any { it.contains("\"total\":32.00") })
             assertTrue(toolResults.any { it.contains("\"total\":0.00") && it.contains("Restaurante") })
+            assertTrue(toolResults.any { it.contains("\"recurrence\":\"MONTHLY\"") && it.contains("\"dayOfMonth\":10") })
+            assertTrue(toolResults.any { it.contains("\"recurrence\":\"MONTHLY\"") && it.contains("\"dayOfMonth\":5") })
+            assertTrue(toolResults.any { it.contains("\"projectedBalance\":6468.00") })
 
             val exposedNames = provider.requests.flatMap(AiRequest::tools)
                 .flatMap { definition -> definition.parameters.properties.keys }

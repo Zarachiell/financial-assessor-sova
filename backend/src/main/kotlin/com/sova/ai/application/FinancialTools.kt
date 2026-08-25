@@ -1,10 +1,13 @@
 package com.sova.ai.application
 
+import com.sova.finance.application.CreateCashFlowEntryCommand
 import com.sova.finance.application.CreateTransactionCommand
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.application.FinancialResult
+import com.sova.finance.application.GetCashFlowProjectionQuery
 import com.sova.finance.application.TransactionFilters
 import com.sova.finance.domain.Account
+import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.FinancialDescription
 import com.sova.finance.domain.FinancialEntryType
@@ -19,6 +22,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -33,6 +37,8 @@ fun financialLocalTools(service: FinancialApplicationService): List<LocalTool> =
     GetIncomeTool(service),
     GetTransactionsTool(service),
     GetCategorySummaryTool(service),
+    CreateCashFlowEntryTool(service),
+    GetCashFlowProjectionTool(service),
 )
 
 class CreateTransactionTool(
@@ -254,6 +260,106 @@ class GetCategorySummaryTool(
     }
 }
 
+class CreateCashFlowEntryTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "create_cash_flow_entry",
+        description = "Registra localmente uma receita ou despesa futura, pontual ou mensal.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "type" to stringParameter("Tipo da previsão.", "INCOME", "EXPENSE"),
+                "amount" to numberParameter("Valor positivo em BRL, sem símbolo de moeda."),
+                "description" to stringParameter("Descrição curta da previsão."),
+                "recurrence" to stringParameter("Recorrência da previsão.", "ONCE", "MONTHLY"),
+                "startDate" to stringParameter("Data inicial ou pontual no formato YYYY-MM-DD."),
+                "endDate" to stringParameter("Data final inclusiva YYYY-MM-DD; omita se não houver."),
+                "dayOfMonth" to integerParameter("Dia 1..31 obrigatório para MONTHLY; omita para ONCE."),
+                "category" to stringParameter("Nome opcional da categoria financeira."),
+                "account" to stringParameter("Nome opcional da conta financeira."),
+            ),
+            required = setOf("type", "amount", "description", "recurrence", "startDate"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val type = arguments.requiredEntryType("type")
+        val recurrence = CashFlowRecurrence.valueOf(arguments.requiredString("recurrence"))
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+        val category = arguments.optionalString("category")?.let { resolveCategory(context, it, type) }
+        val creation = service.createCashFlowEntry(
+            context.financialContext,
+            CreateCashFlowEntryCommand(
+                type = type,
+                money = Money.of(arguments.requiredDecimal("amount")),
+                description = FinancialDescription.of(arguments.requiredString("description")),
+                accountId = account?.id,
+                categoryId = category?.id,
+                recurrence = recurrence,
+                startDate = arguments.requiredDate("startDate"),
+                endDate = arguments.optionalDate("endDate"),
+                dayOfMonth = arguments.optionalInt("dayOfMonth"),
+                source = FinancialSource.WHATSAPP_TEXT,
+                sourceReferenceId = SourceReferenceId.of(context.inboundMessageSid),
+            ),
+        ).requiredValue()
+
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("created", JsonPrimitive(creation.created))
+            put("type", JsonPrimitive(creation.value.type.name))
+            put("amount", moneyJson(creation.value.money.amount))
+            put("currency", JsonPrimitive(creation.value.currency.name))
+            put("description", JsonPrimitive(creation.value.description.value))
+            put("recurrence", JsonPrimitive(creation.value.recurrence.name))
+            put("startDate", JsonPrimitive(creation.value.startDate.toString()))
+            creation.value.endDate?.let { put("endDate", JsonPrimitive(it.toString())) }
+            creation.value.dayOfMonth?.let { put("dayOfMonth", JsonPrimitive(it)) }
+            category?.let { put("category", JsonPrimitive(it.name.value)) }
+            account?.let { put("account", JsonPrimitive(it.name.value)) }
+        }
+    }
+}
+
+class GetCashFlowProjectionTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "get_cash_flow_projection",
+        description = "Calcula localmente o saldo projetado até uma data futura inclusiva.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "targetDate" to stringParameter("Data alvo inclusiva no formato YYYY-MM-DD."),
+                "account" to stringParameter("Nome opcional da conta financeira."),
+            ),
+            required = setOf("targetDate"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+        val projection = service.getCashFlowProjection(
+            context.financialContext,
+            GetCashFlowProjectionQuery(
+                targetDate = arguments.requiredDate("targetDate"),
+                accountId = account?.id,
+            ),
+        ).requiredValue()
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("currentBalance", moneyJson(projection.currentBalance))
+            put("expectedIncome", moneyJson(projection.expectedIncome))
+            put("expectedExpenses", moneyJson(projection.expectedExpenses))
+            put("projectedBalance", moneyJson(projection.projectedBalance))
+            put("currency", JsonPrimitive("BRL"))
+            put("fromDate", JsonPrimitive(projection.fromDate.toString()))
+            put("targetDate", JsonPrimitive(projection.targetDate.toString()))
+            put("occurrenceCount", JsonPrimitive(projection.occurrenceCount))
+            account?.let { put("account", JsonPrimitive(it.name.value)) }
+        }
+    }
+}
+
 abstract class FinancialLocalTool(
     protected val service: FinancialApplicationService,
 ) : LocalTool {
@@ -375,6 +481,8 @@ private fun JsonObject.requiredDate(name: String): LocalDate =
     LocalDate.parse(requiredString(name))
 
 private fun JsonObject.optionalDate(name: String): LocalDate? = optionalString(name)?.let(LocalDate::parse)
+
+private fun JsonObject.optionalInt(name: String): Int? = this[name]?.jsonPrimitive?.intOrNull
 
 private fun JsonObject.requiredEntryType(name: String): FinancialEntryType =
     FinancialEntryType.valueOf(requiredString(name))

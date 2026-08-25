@@ -4,6 +4,7 @@ import com.sova.finance.domain.Account
 import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CashFlowEntry
+import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.FinancialContext
@@ -204,6 +205,183 @@ class FinancialApplicationServiceTest {
         assertEquals(1, repository.cashFlowEntries.size)
     }
 
+    @Test
+    fun `monthly and one-time entries produce isolated account projections and support deactivation`() = runBlocking {
+        val repository = InMemoryFinancialRepository(setOf(context, otherContext))
+        val service = service(repository)
+        val account = service.createAccount(
+            context,
+            CreateAccountCommand(AccountName.of("Joint checking"), AccountType.CHECKING),
+        ).createdValue()
+        val incomeCategory = service.createCategory(
+            context,
+            CreateCategoryCommand(CategoryName.of("Salary"), FinancialEntryType.INCOME),
+        ).createdValue()
+        val expenseCategory = service.createCategory(
+            context,
+            CreateCategoryCommand(CategoryName.of("Housing"), FinancialEntryType.EXPENSE),
+        ).createdValue()
+        val otherCategory = service.createCategory(
+            otherContext,
+            CreateCategoryCommand(CategoryName.of("Other income"), FinancialEntryType.INCOME),
+        ).createdValue()
+
+        service.createTransaction(
+            context,
+            CreateTransactionCommand(
+                accountId = account.id,
+                type = FinancialEntryType.INCOME,
+                money = Money.of(BigDecimal("1000.00")),
+                description = FinancialDescription.of("Opening income"),
+                categoryId = incomeCategory.id,
+                occurredOn = LocalDate.parse("2026-08-20"),
+                source = FinancialSource.DASHBOARD,
+                sourceReferenceId = SourceReferenceId.of("opening-income"),
+            ),
+        ).createdValue()
+        service.createTransaction(
+            context,
+            CreateTransactionCommand(
+                accountId = account.id,
+                type = FinancialEntryType.EXPENSE,
+                money = Money.of(BigDecimal("200.00")),
+                description = FinancialDescription.of("Opening expense"),
+                categoryId = expenseCategory.id,
+                occurredOn = LocalDate.parse("2026-08-21"),
+                source = FinancialSource.DASHBOARD,
+                sourceReferenceId = SourceReferenceId.of("opening-expense"),
+            ),
+        ).createdValue()
+
+        val monthlyIncome = service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.INCOME,
+                amount = "500.00",
+                description = "Monthly income",
+                accountId = account.id,
+                categoryId = incomeCategory.id,
+                recurrence = CashFlowRecurrence.MONTHLY,
+                startDate = "2026-08-01",
+                dayOfMonth = 5,
+                reference = "monthly-income",
+            ),
+        ).createdValue()
+        service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.EXPENSE,
+                amount = "200.00",
+                description = "Monthly housing",
+                accountId = account.id,
+                categoryId = expenseCategory.id,
+                recurrence = CashFlowRecurrence.MONTHLY,
+                startDate = "2026-08-01",
+                dayOfMonth = 10,
+                reference = "monthly-expense",
+            ),
+        ).createdValue()
+        service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.EXPENSE,
+                amount = "50.00",
+                description = "One-time insurance",
+                accountId = account.id,
+                categoryId = expenseCategory.id,
+                startDate = "2026-08-25",
+                reference = "once-expense",
+            ),
+        ).createdValue()
+        service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.INCOME,
+                amount = "100.00",
+                description = "Unassigned income",
+                categoryId = incomeCategory.id,
+                startDate = "2026-09-01",
+                reference = "unassigned-income",
+            ),
+        ).createdValue()
+        val inactive = service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.EXPENSE,
+                amount = "9999.00",
+                description = "Inactive expense",
+                accountId = account.id,
+                categoryId = expenseCategory.id,
+                recurrence = CashFlowRecurrence.MONTHLY,
+                startDate = "2026-08-01",
+                dayOfMonth = 25,
+                reference = "inactive-expense",
+            ),
+        ).createdValue()
+        val deactivated = service.deactivateCashFlowEntry(context, inactive.id).value()
+        assertFalse(deactivated.active)
+        assertEquals(now, deactivated.updatedAt)
+
+        service.createCashFlowEntry(
+            otherContext,
+            cashFlowCommand(
+                type = FinancialEntryType.INCOME,
+                amount = "9000.00",
+                description = "Other household income",
+                categoryId = otherCategory.id,
+                recurrence = CashFlowRecurrence.MONTHLY,
+                startDate = "2026-08-01",
+                dayOfMonth = 1,
+                reference = "other-income",
+            ),
+        ).createdValue()
+
+        val targetDate = LocalDate.parse("2026-09-10")
+        val general = service.getCashFlowProjection(context, GetCashFlowProjectionQuery(targetDate)).value()
+        assertEquals(BigDecimal("800.00"), general.currentBalance)
+        assertEquals(BigDecimal("600.00"), general.expectedIncome)
+        assertEquals(BigDecimal("250.00"), general.expectedExpenses)
+        assertEquals(BigDecimal("1150.00"), general.projectedBalance)
+        assertEquals(4, general.occurrenceCount)
+
+        val accountProjection = service.getCashFlowProjection(
+            context,
+            GetCashFlowProjectionQuery(targetDate, account.id),
+        ).value()
+        assertEquals(BigDecimal("500.00"), accountProjection.expectedIncome)
+        assertEquals(BigDecimal("250.00"), accountProjection.expectedExpenses)
+        assertEquals(BigDecimal("1050.00"), accountProjection.projectedBalance)
+        assertEquals(3, accountProjection.occurrenceCount)
+
+        val activeForAccount = service.listCashFlowEntries(
+            context,
+            CashFlowEntryFilters(active = true, accountId = account.id),
+        ).value()
+        assertEquals(3, activeForAccount.size)
+        assertTrue(activeForAccount.all { it.householdId == householdId && it.createdByUserId == userId })
+        assertEquals(
+            listOf(deactivated),
+            service.listCashFlowEntries(context, CashFlowEntryFilters(active = false)).value(),
+        )
+        assertTrue(
+            service.listCashFlowEntries(otherContext).value().none { it.id == monthlyIncome.id },
+        )
+        assertRejected(
+            FinancialRejection.INVALID_PROJECTION_TARGET,
+            service.getCashFlowProjection(
+                context,
+                GetCashFlowProjectionQuery(LocalDate.parse("2026-08-23")),
+            ),
+        )
+        assertRejected(
+            FinancialRejection.PROJECTION_HORIZON_EXCEEDED,
+            service.getCashFlowProjection(
+                context,
+                GetCashFlowProjectionQuery(LocalDate.parse("2028-08-25")),
+            ),
+        )
+    }
+
     private fun service(repository: InMemoryFinancialRepository): FinancialApplicationService {
         val ids = (1..20).map {
             id("30000000-0000-0000-0000-${it.toString().padStart(12, '0')}")
@@ -224,6 +402,29 @@ class FinancialApplicationServiceTest {
         description = FinancialDescription.of("Lunch"),
         categoryId = categoryId,
         occurredOn = occurredOn,
+        source = FinancialSource.DASHBOARD,
+        sourceReferenceId = SourceReferenceId.of(reference),
+    )
+
+    private fun cashFlowCommand(
+        type: FinancialEntryType,
+        amount: String,
+        description: String,
+        categoryId: UUID,
+        startDate: String,
+        reference: String,
+        accountId: UUID? = null,
+        recurrence: CashFlowRecurrence = CashFlowRecurrence.ONCE,
+        dayOfMonth: Int? = null,
+    ) = CreateCashFlowEntryCommand(
+        type = type,
+        money = Money.of(BigDecimal(amount)),
+        description = FinancialDescription.of(description),
+        accountId = accountId,
+        categoryId = categoryId,
+        recurrence = recurrence,
+        startDate = LocalDate.parse(startDate),
+        dayOfMonth = dayOfMonth,
         source = FinancialSource.DASHBOARD,
         sourceReferenceId = SourceReferenceId.of(reference),
     )
@@ -319,8 +520,31 @@ private class InMemoryFinancialRepository(
         return true
     }
 
-    override suspend fun listCashFlowEntries(householdId: UUID): List<CashFlowEntry> =
-        cashFlowEntries.values.filter { it.householdId == householdId }.sortedBy { it.startDate }
+    override suspend fun findCashFlowEntry(householdId: UUID, entryId: UUID): CashFlowEntry? =
+        cashFlowEntries[entryId]?.takeIf { it.householdId == householdId }
+
+    override suspend fun deactivateCashFlowEntry(
+        householdId: UUID,
+        entryId: UUID,
+        updatedAt: Instant,
+    ): Boolean {
+        val entry = findCashFlowEntry(householdId, entryId)?.takeIf(CashFlowEntry::active) ?: return false
+        cashFlowEntries[entryId] = entry.copy(active = false, updatedAt = updatedAt)
+        return true
+    }
+
+    override suspend fun listCashFlowEntries(
+        householdId: UUID,
+        filters: CashFlowEntryFilters,
+    ): List<CashFlowEntry> = cashFlowEntries.values.asSequence()
+        .filter { it.householdId == householdId }
+        .filter { filters.type == null || it.type == filters.type }
+        .filter { filters.active == null || it.active == filters.active }
+        .filter { filters.from == null || it.endDate == null || !it.endDate.isBefore(filters.from) }
+        .filter { filters.to == null || !it.startDate.isAfter(filters.to) }
+        .filter { filters.accountId == null || it.accountId == filters.accountId }
+        .sortedBy { it.startDate }
+        .toList()
 }
 
 private fun <T> FinancialResult<T>.value(): T = assertIs<FinancialResult.Success<T>>(this).value

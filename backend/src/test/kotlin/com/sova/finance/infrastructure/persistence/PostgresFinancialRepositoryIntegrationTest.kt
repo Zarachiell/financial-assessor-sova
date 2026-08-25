@@ -1,5 +1,6 @@
 package com.sova.finance.infrastructure.persistence
 
+import com.sova.finance.application.CashFlowEntryFilters
 import com.sova.finance.application.CreateAccountCommand
 import com.sova.finance.application.CreateCashFlowEntryCommand
 import com.sova.finance.application.CreateCategoryCommand
@@ -10,6 +11,7 @@ import com.sova.finance.application.FinancialResult
 import com.sova.finance.application.TransactionFilters
 import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
+import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.domain.FinancialDescription
@@ -81,6 +83,10 @@ class PostgresFinancialRepositoryIntegrationTest {
                     contextB,
                     CreateCategoryCommand(CategoryName.of("Other household"), FinancialEntryType.EXPENSE),
                 ).createdValue()
+                val accountB = service.createAccount(
+                    contextB,
+                    CreateAccountCommand(AccountName.of("Other account"), AccountType.CHECKING),
+                ).createdValue()
 
                 val transactionCommand = CreateTransactionCommand(
                     accountId = account.id,
@@ -120,9 +126,13 @@ class PostgresFinancialRepositoryIntegrationTest {
                 val cashFlowCommand = CreateCashFlowEntryCommand(
                     type = FinancialEntryType.INCOME,
                     money = Money.of(BigDecimal("6000")),
-                    description = FinancialDescription.of("September salary"),
+                    description = FinancialDescription.of("Monthly salary"),
+                    accountId = account.id,
                     categoryId = incomeCategory.id,
+                    recurrence = CashFlowRecurrence.MONTHLY,
                     startDate = LocalDate.parse("2026-09-01"),
+                    endDate = LocalDate.parse("2026-12-31"),
+                    dayOfMonth = 5,
                     source = FinancialSource.DASHBOARD,
                     sourceReferenceId = SourceReferenceId.of("cash-flow-1"),
                 )
@@ -131,7 +141,44 @@ class PostgresFinancialRepositoryIntegrationTest {
                 assertTrue(cashFlow.created)
                 assertFalse(cashFlowDuplicate.created)
                 assertFalse(repository.insertCashFlowEntry(cashFlow.value.copy(id = UUID.randomUUID())))
-                assertEquals(listOf(cashFlow.value), service.listCashFlowEntries(contextA).value())
+                assertEquals(account.id, cashFlow.value.accountId)
+                assertEquals(CashFlowRecurrence.MONTHLY, cashFlow.value.recurrence)
+                assertEquals(5, cashFlow.value.dayOfMonth)
+                assertEquals(LocalDate.parse("2026-12-31"), cashFlow.value.endDate)
+
+                val oneTime = service.createCashFlowEntry(
+                    contextA,
+                    CreateCashFlowEntryCommand(
+                        type = FinancialEntryType.EXPENSE,
+                        money = Money.of(BigDecimal("100")),
+                        description = FinancialDescription.of("One-time fee"),
+                        startDate = LocalDate.parse("2026-09-15"),
+                        source = FinancialSource.DASHBOARD,
+                        sourceReferenceId = SourceReferenceId.of("cash-flow-2"),
+                    ),
+                ).createdValue()
+
+                assertEquals(listOf(cashFlow.value, oneTime), service.listCashFlowEntries(contextA).value())
+                assertEquals(
+                    listOf(cashFlow.value),
+                    service.listCashFlowEntries(
+                        contextA,
+                        CashFlowEntryFilters(
+                            active = true,
+                            from = LocalDate.parse("2026-10-01"),
+                            to = LocalDate.parse("2026-10-31"),
+                            accountId = account.id,
+                        ),
+                    ).value(),
+                )
+                assertTrue(service.listCashFlowEntries(contextB).value().isEmpty())
+
+                val deactivated = service.deactivateCashFlowEntry(contextA, oneTime.id).value()
+                assertFalse(deactivated.active)
+                assertEquals(
+                    listOf(deactivated),
+                    service.listCashFlowEntries(contextA, CashFlowEntryFilters(active = false)).value(),
+                )
 
                 assertDatabaseConstraints(
                     database = database,
@@ -141,6 +188,7 @@ class PostgresFinancialRepositoryIntegrationTest {
                     accountId = account.id,
                     expenseCategoryId = expenseCategory.id,
                     categoryBId = categoryB.id,
+                    accountBId = accountB.id,
                 )
             }
         }
@@ -176,6 +224,7 @@ class PostgresFinancialRepositoryIntegrationTest {
         accountId: UUID,
         expenseCategoryId: UUID,
         categoryBId: UUID,
+        accountBId: UUID,
     ) {
         database.withConnection { connection ->
             val sql = DSL.using(connection, SQLDialect.POSTGRES)
@@ -241,18 +290,68 @@ class PostgresFinancialRepositoryIntegrationTest {
                 )
             }
             assertFailsWith<DataAccessException> {
-                sql.execute(
-                    """
-                    INSERT INTO cash_flow_entries
-                        (id, household_id, created_by_user_id, type, amount, currency, description, category_id,
-                         recurrence, start_date, end_date, active, source, source_reference_id, created_at, updated_at)
-                    VALUES (?, ?, ?, 'EXPENSE', 1.00, 'BRL', 'Invalid recurrence', ?, 'MONTHLY',
-                            DATE '2026-09-01', NULL, TRUE, 'DASHBOARD', 'monthly', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """.trimIndent(),
-                    UUID.randomUUID(),
+                insertCashFlowEntry(
+                    sql = sql,
+                    householdId = householdA,
+                    userId = userA,
+                    accountId = accountId,
+                    categoryId = expenseCategoryId,
+                    recurrence = "MONTHLY",
+                    dayOfMonth = null,
+                    endDate = LocalDate.parse("2026-12-31"),
+                    reference = "monthly-missing-day",
+                )
+            }
+            assertFailsWith<DataAccessException> {
+                insertCashFlowEntry(
+                    sql,
                     householdA,
                     userA,
+                    accountId,
                     expenseCategoryId,
+                    "MONTHLY",
+                    32,
+                    LocalDate.parse("2026-12-31"),
+                    "monthly-invalid-day",
+                )
+            }
+            assertFailsWith<DataAccessException> {
+                insertCashFlowEntry(
+                    sql,
+                    householdA,
+                    userA,
+                    accountId,
+                    expenseCategoryId,
+                    "ONCE",
+                    1,
+                    null,
+                    "once-with-day",
+                )
+            }
+            assertFailsWith<DataAccessException> {
+                insertCashFlowEntry(
+                    sql,
+                    householdA,
+                    userA,
+                    accountId,
+                    expenseCategoryId,
+                    "MONTHLY",
+                    5,
+                    LocalDate.parse("2026-08-31"),
+                    "end-before-start",
+                )
+            }
+            assertFailsWith<DataAccessException> {
+                insertCashFlowEntry(
+                    sql,
+                    householdA,
+                    userA,
+                    accountBId,
+                    expenseCategoryId,
+                    "MONTHLY",
+                    5,
+                    LocalDate.parse("2026-12-31"),
+                    "cross-household-account",
                 )
             }
             assertEquals(
@@ -290,6 +389,38 @@ class PostgresFinancialRepositoryIntegrationTest {
             amount,
             currency,
             categoryId,
+            reference,
+        )
+    }
+
+    private fun insertCashFlowEntry(
+        sql: org.jooq.DSLContext,
+        householdId: UUID,
+        userId: UUID,
+        accountId: UUID?,
+        categoryId: UUID?,
+        recurrence: String,
+        dayOfMonth: Int?,
+        endDate: LocalDate?,
+        reference: String,
+    ) {
+        sql.execute(
+            """
+            INSERT INTO cash_flow_entries
+                (id, household_id, created_by_user_id, account_id, type, amount, currency, description, category_id,
+                 recurrence, start_date, end_date, day_of_month, active, source, source_reference_id,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'EXPENSE', 1.00, 'BRL', 'Constraint test', ?, ?, DATE '2026-09-01', ?, ?,
+                    TRUE, 'DASHBOARD', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """.trimIndent(),
+            UUID.randomUUID(),
+            householdId,
+            userId,
+            accountId,
+            categoryId,
+            recurrence,
+            endDate,
+            dayOfMonth,
             reference,
         )
     }

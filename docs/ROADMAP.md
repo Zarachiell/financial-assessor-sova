@@ -150,18 +150,18 @@ Permitir planejamento financeiro futuro.
 
 ### Entregáveis
 
-- [ ] recorrência
-- [ ] receitas previstas
-- [ ] despesas previstas
-- [ ] projeção de saldo
-- [ ] `create_cash_flow_entry`
-- [ ] `get_cash_flow_projection`
+- [x] recorrência
+- [x] receitas previstas
+- [x] despesas previstas
+- [x] projeção de saldo
+- [x] `create_cash_flow_entry`
+- [x] `get_cash_flow_projection`
 
 ### Casos obrigatórios
 
-- [ ] "Todo dia 10 pago R$ 2.000 de aluguel"
-- [ ] "Recebo R$ 8.000 todo dia 5"
-- [ ] "Quanto teremos no dia 25?"
+- [x] "Todo dia 10 pago R$ 2.000 de aluguel"
+- [x] "Recebo R$ 8.000 todo dia 5"
+- [x] "Quanto teremos no dia 25?"
 
 ---
 

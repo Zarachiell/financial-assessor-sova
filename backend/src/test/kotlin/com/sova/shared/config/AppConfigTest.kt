@@ -60,6 +60,23 @@ class AppConfigTest {
     }
 
     @Test
+    fun `uses and validates the configurable cash flow horizon`() {
+        assertEquals(24, AppConfig.fromEnvironment(requiredEnvironment).cashFlow.maxProjectionMonths)
+        assertEquals(
+            36,
+            AppConfig.fromEnvironment(
+                requiredEnvironment + ("SOVA_MAX_PROJECTION_MONTHS" to "36"),
+            ).cashFlow.maxProjectionMonths,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_MAX_PROJECTION_MONTHS" to "121"))
+        }
+        assertFailsWith<IllegalStateException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_MAX_PROJECTION_MONTHS" to "zero"))
+        }
+    }
+
+    @Test
     fun `rejects unsupported AI provider`() {
         assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_AI_PROVIDER" to "remote-mcp"))

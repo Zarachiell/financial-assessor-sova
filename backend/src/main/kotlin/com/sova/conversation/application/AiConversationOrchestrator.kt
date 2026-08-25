@@ -123,7 +123,9 @@ class AiConversationOrchestrator(
             completedBatch = if (batchSucceeded) {
                 executedBatch
             } else {
-                completedBatch + executedBatch.filter { it.name == CREATE_TRANSACTION_TOOL && it.result.successful }
+                completedBatch + executedBatch.filter { execution ->
+                    execution.name in PERSISTED_WRITE_TOOLS && execution.result.successful
+                }
             }
             availableTools = if (batchSucceeded) emptyList() else registry.definitions
         }
@@ -183,6 +185,9 @@ class AiConversationOrchestrator(
         return executions.singleOrNull()
             ?.takeIf { it.name == CREATE_TRANSACTION_TOOL }
             ?.let(::transactionFallback)
+            ?: executions.singleOrNull()
+                ?.takeIf { it.name == CREATE_CASH_FLOW_ENTRY_TOOL }
+                ?.let(::cashFlowFallback)
             ?: GENERIC_LOCAL_FALLBACK
     }
 
@@ -198,6 +203,24 @@ class AiConversationOrchestrator(
         val category = content.getValue("category").jsonPrimitive.content
         val occurredOn = LocalDate.parse(content.getValue("occurredOn").jsonPrimitive.content).format(DISPLAY_DATE)
         "Registrado com sucesso: $type de R$ $amount em $category, em $occurredOn. 🐾 " +
+            "Não envie novamente; a resposta detalhada ficou indisponível."
+    }.getOrDefault(GENERIC_LOCAL_FALLBACK)
+
+    private fun cashFlowFallback(execution: CompletedToolExecution): String = runCatching {
+        val content = JSON.parseToJsonElement(execution.result.content).jsonObject
+        require(content.getValue("ok").jsonPrimitive.boolean)
+        val type = when (content.getValue("type").jsonPrimitive.content) {
+            "INCOME" -> "receita prevista"
+            "EXPENSE" -> "despesa prevista"
+            else -> error("Unsupported cash flow type")
+        }
+        val amount = content.getValue("amount").jsonPrimitive.content.toBigDecimal().asBrazilianMoney()
+        val recurrence = when (content.getValue("recurrence").jsonPrimitive.content) {
+            "ONCE" -> "pontual"
+            "MONTHLY" -> "mensal"
+            else -> error("Unsupported cash flow recurrence")
+        }
+        "Planejamento registrado: $type de R$ $amount, $recurrence. 🐾 " +
             "Não envie novamente; a resposta detalhada ficou indisponível."
     }.getOrDefault(GENERIC_LOCAL_FALLBACK)
 
@@ -224,7 +247,10 @@ class AiConversationOrchestrator(
             nunca para repetir escrita.
 
             create_transaction: type INCOME/EXPENSE, amount positivo, occurredOn YYYY-MM-DD e nomes de conta/categoria;
-            use null nos campos opcionais sem valor. Categorias de despesa: ${DefaultFinancialCatalog.expenseCategories.joinToString()}.
+            omita campos opcionais sem valor. Evento futuro ou recorrente usa create_cash_flow_entry, nunca
+            create_transaction: recurrence ONCE/MONTHLY, startDate YYYY-MM-DD, dayOfMonth 1..31 obrigatório para MONTHLY
+            e endDate opcional. Projeções usam get_cash_flow_projection com targetDate YYYY-MM-DD; nunca calcule saldo
+            projetado por conta própria. Categorias de despesa: ${DefaultFinancialCatalog.expenseCategories.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
             restaurante = Restaurante; reembolso = Reembolso. Nunca envie IDs, SQL ou URLs.
 
@@ -250,6 +276,8 @@ class AiConversationOrchestrator(
         const val MAX_OUTBOUND_MESSAGE_LENGTH = 1_500
         const val MAX_TOOL_CALLS_PER_ROUND = 8
         const val CREATE_TRANSACTION_TOOL = "create_transaction"
+        const val CREATE_CASH_FLOW_ENTRY_TOOL = "create_cash_flow_entry"
+        val PERSISTED_WRITE_TOOLS = setOf(CREATE_TRANSACTION_TOOL, CREATE_CASH_FLOW_ENTRY_TOOL)
         const val GENERIC_LOCAL_FALLBACK =
             "A operação financeira foi concluída localmente, mas a resposta detalhada ficou indisponível. " +
                 "Se foi um registro, não envie novamente; consulte os dados em instantes."

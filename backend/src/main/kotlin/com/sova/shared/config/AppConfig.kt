@@ -9,6 +9,7 @@ data class AppConfig(
     val twilio: TwilioConfig,
     val household: HouseholdProvisioningConfig,
     val ai: AiConfig,
+    val cashFlow: CashFlowConfig,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig =
@@ -49,9 +50,14 @@ data class AppConfig(
                     apiKey = environment.required("GROQ_API_KEY"),
                     model = environment.required("GROQ_MODEL"),
                 ),
+                cashFlow = CashFlowConfig(
+                    maxProjectionMonths = environment.optionalPositiveInt("SOVA_MAX_PROJECTION_MONTHS")
+                        ?: DEFAULT_MAX_PROJECTION_MONTHS,
+                ),
             )
 
         private const val SUPPORTED_AI_PROVIDER = "groq"
+        private const val DEFAULT_MAX_PROJECTION_MONTHS = 24
     }
 }
 
@@ -77,6 +83,20 @@ data class AiConfig(
     val apiKey: String,
     val model: String,
 )
+
+data class CashFlowConfig(
+    val maxProjectionMonths: Int,
+) {
+    init {
+        require(maxProjectionMonths in 1..MAX_PROJECTION_MONTHS) {
+            "Maximum projection months must be between 1 and $MAX_PROJECTION_MONTHS"
+        }
+    }
+
+    private companion object {
+        const val MAX_PROJECTION_MONTHS = 120
+    }
+}
 
 data class HouseholdProvisioningConfig(
     val name: String,
@@ -108,6 +128,13 @@ private fun Map<String, String>.optionalPort(name: String): Int? =
         rawValue.toIntOrNull()
             ?.takeIf { it in 1..65_535 }
             ?: error("Environment variable $name must be a port between 1 and 65535")
+    }
+
+private fun Map<String, String>.optionalPositiveInt(name: String): Int? =
+    get(name)?.let { rawValue ->
+        rawValue.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?: error("Environment variable $name must be a positive integer")
     }
 
 private fun Map<String, String>.requiredWhatsappAddress(name: String): String =

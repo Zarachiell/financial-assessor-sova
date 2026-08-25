@@ -160,6 +160,24 @@ class AiConversationOrchestratorTest {
         assertTrue(provider.requests.last().tools.isEmpty())
     }
 
+    @Test
+    fun `acknowledges a persisted cash flow entry locally when the final provider response fails`() = runBlocking {
+        val tool = SuccessfulCashFlowTool()
+        val provider = ToolThenRateLimitedProvider("create_cash_flow_entry")
+        val orchestrator = orchestrator(provider, listOf(tool)) { emptyList() }
+
+        val response = orchestrator.respond(context("Todo dia 10 pago R$ 2.000 de aluguel"))
+
+        assertEquals(
+            "Planejamento registrado: despesa prevista de R$ 2000,00, mensal. 🐾 " +
+                "Não envie novamente; a resposta detalhada ficou indisponível.",
+            response,
+        )
+        assertEquals(1, tool.executionCount)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests.last().tools.isEmpty())
+    }
+
     private fun orchestrator(
         provider: AiProvider,
         tools: List<LocalTool>,
@@ -222,7 +240,9 @@ private class GeneratingToolProvider : AiProvider {
     }
 }
 
-private class ToolThenRateLimitedProvider : AiProvider {
+private class ToolThenRateLimitedProvider(
+    private val toolName: String = "create_transaction",
+) : AiProvider {
     val requests = mutableListOf<AiRequest>()
 
     override suspend fun complete(request: AiRequest): AiResponse {
@@ -231,7 +251,7 @@ private class ToolThenRateLimitedProvider : AiProvider {
             return AiResponse(
                 AiMessage(
                     role = AiMessageRole.ASSISTANT,
-                    toolCalls = listOf(AiToolCall("call-create", "create_transaction", "{}")),
+                    toolCalls = listOf(AiToolCall("call-create", toolName, "{}")),
                 ),
             )
         }
@@ -296,6 +316,25 @@ private class SuccessfulTransactionTool : LocalTool {
         put("amount", JsonPrimitive("32.00"))
         put("category", JsonPrimitive("Alimentação"))
         put("occurredOn", JsonPrimitive("2026-08-25"))
+    }
+}
+
+private class SuccessfulCashFlowTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "create_cash_flow_entry",
+        description = "Creates a test cash flow entry.",
+        parameters = AiToolParameters(
+            properties = mapOf("account" to AiToolParameter(AiJsonType.STRING, "Optional account.")),
+        ),
+    )
+    var executionCount: Int = 0
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject = buildJsonObject {
+        executionCount += 1
+        put("ok", JsonPrimitive(true))
+        put("type", JsonPrimitive("EXPENSE"))
+        put("amount", JsonPrimitive("2000.00"))
+        put("recurrence", JsonPrimitive("MONTHLY"))
     }
 }
 
