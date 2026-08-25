@@ -47,6 +47,7 @@ dependencies {
 
     testImplementation("io.ktor:ktor-server-test-host")
     testImplementation("io.ktor:ktor-client-mock")
+    testImplementation("ch.qos.logback:logback-classic:1.5.38")
     testImplementation(platform("io.zonky.test.postgres:embedded-postgres-binaries-bom:18.3.0"))
     testImplementation("io.zonky.test:embedded-postgres:2.2.2")
     testImplementation(kotlin("test"))

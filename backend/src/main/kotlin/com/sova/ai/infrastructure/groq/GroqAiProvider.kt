@@ -21,6 +21,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
@@ -39,6 +40,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.LoggerFactory
 
 class GroqAiProvider(
     private val apiKey: String,
@@ -53,22 +55,24 @@ class GroqAiProvider(
 
     override suspend fun complete(request: AiRequest): AiResponse {
         val payload = request.toGroqRequest(model)
+        val requestBody = json.encodeToString(payload)
+        logRequestMetrics(request, payload, requestBody)
         try {
             val response = client.post(CHAT_COMPLETIONS_URL) {
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 contentType(ContentType.Application.Json)
-                setBody(json.encodeToString(payload))
+                setBody(requestBody)
             }
             val responseBody = response.bodyAsText()
             when {
                 response.status == HttpStatusCode.TooManyRequests ->
-                    fail(AiProviderFailure.RATE_LIMITED, response.status, responseBody)
+                    fail(AiProviderFailure.RATE_LIMITED, response.status, responseBody, response.headers)
                 response.status.value in 400..499 ->
-                    fail(AiProviderFailure.REJECTED_REQUEST, response.status, responseBody)
+                    fail(AiProviderFailure.REJECTED_REQUEST, response.status, responseBody, response.headers)
                 response.status.value >= 500 ->
-                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody)
+                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody, response.headers)
                 response.status.value !in 200..299 ->
-                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody)
+                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody, response.headers)
             }
             return json.decodeFromString<GroqChatResponse>(responseBody).toAiResponse()
         } catch (cause: CancellationException) {
@@ -90,6 +94,30 @@ class GroqAiProvider(
         }
     }
 
+    private fun logRequestMetrics(
+        request: AiRequest,
+        payload: GroqChatRequest,
+        requestBody: String,
+    ) {
+        val toolDefinitionsChars = payload.tools
+            ?.let { definitions -> json.encodeToString(definitions).length }
+            ?: 0
+        LOGGER.atInfo()
+            .addKeyValue("provider", PROVIDER_NAME)
+            .addKeyValue("model", model)
+            .addKeyValue("estimatedInputTokens", requestBody.estimatedTokenCount())
+            .addKeyValue(
+                "systemPromptChars",
+                request.messages
+                    .asSequence()
+                    .filter { message -> message.role == AiMessageRole.SYSTEM }
+                    .sumOf { message -> message.content?.length ?: 0 },
+            )
+            .addKeyValue("toolDefinitionsChars", toolDefinitionsChars)
+            .addKeyValue("conversationMessages", request.messages.size)
+            .log("Groq request prepared")
+    }
+
     override fun close() {
         client.close()
     }
@@ -98,8 +126,29 @@ class GroqAiProvider(
         failure: AiProviderFailure,
         status: HttpStatusCode,
         responseBody: String,
+        headers: Headers,
     ): Nothing {
         val error = json.safeErrorMetadata(responseBody)
+        val loggedBody = responseBody.safeForProviderLog(apiKey)
+        val event = if (status.value >= 500) LOGGER.atError() else LOGGER.atWarn()
+        event
+            .addKeyValue("provider", PROVIDER_NAME)
+            .addKeyValue("model", model)
+            .addKeyValue("failure", failure.name.lowercase())
+            .addKeyValue("httpStatus", status.value)
+            .addKeyValue("providerErrorType", error.type)
+            .addKeyValue("providerErrorCode", error.code)
+            .addKeyValue("providerResponseBody", loggedBody.value)
+            .addKeyValue("providerResponseBodyChars", responseBody.length)
+            .addKeyValue("providerResponseBodyTruncated", loggedBody.truncated)
+            .addKeyValue("retryAfter", headers.safeValue(RETRY_AFTER_HEADER))
+            .addKeyValue("rateLimitLimitRequests", headers.safeValue(RATE_LIMIT_LIMIT_REQUESTS_HEADER))
+            .addKeyValue("rateLimitLimitTokens", headers.safeValue(RATE_LIMIT_LIMIT_TOKENS_HEADER))
+            .addKeyValue("rateLimitRemainingRequests", headers.safeValue(RATE_LIMIT_REMAINING_REQUESTS_HEADER))
+            .addKeyValue("rateLimitRemainingTokens", headers.safeValue(RATE_LIMIT_REMAINING_TOKENS_HEADER))
+            .addKeyValue("rateLimitResetRequests", headers.safeValue(RATE_LIMIT_RESET_REQUESTS_HEADER))
+            .addKeyValue("rateLimitResetTokens", headers.safeValue(RATE_LIMIT_RESET_TOKENS_HEADER))
+            .log("Groq request failed")
         throw AiProviderException(
             failure = failure,
             httpStatusCode = status.value,
@@ -109,10 +158,12 @@ class GroqAiProvider(
     }
 
     private companion object {
+        const val PROVIDER_NAME = "groq"
         const val CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
         const val REQUEST_TIMEOUT_MILLIS = 20_000L
         const val CONNECT_TIMEOUT_MILLIS = 5_000L
         const val SOCKET_TIMEOUT_MILLIS = 20_000L
+        val LOGGER = LoggerFactory.getLogger("com.sova.ai.groq")
         val DEFAULT_JSON = Json {
             ignoreUnknownKeys = true
             explicitNulls = false
@@ -134,8 +185,26 @@ private data class GroqErrorMetadata(
     val code: String? = null,
 )
 
+private data class LoggedProviderBody(
+    val value: String,
+    val truncated: Boolean,
+)
+
 private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 64
+private const val MAX_PROVIDER_BODY_LOG_LENGTH = 8_192
+private const val MAX_RATE_LIMIT_HEADER_LENGTH = 128
+private const val APPROXIMATE_UTF8_BYTES_PER_TOKEN = 4
 private val SAFE_DIAGNOSTIC_VALUE = Regex("^[A-Za-z0-9._-]+$")
+private val BEARER_CREDENTIAL = Regex("(?i)Bearer\\s+[^\\s,;\\\"]+")
+private val GROQ_API_KEY = Regex("\\bgsk_[A-Za-z0-9_-]+\\b")
+private const val REDACTED = "[REDACTED]"
+private const val RETRY_AFTER_HEADER = "retry-after"
+private const val RATE_LIMIT_LIMIT_REQUESTS_HEADER = "x-ratelimit-limit-requests"
+private const val RATE_LIMIT_LIMIT_TOKENS_HEADER = "x-ratelimit-limit-tokens"
+private const val RATE_LIMIT_REMAINING_REQUESTS_HEADER = "x-ratelimit-remaining-requests"
+private const val RATE_LIMIT_REMAINING_TOKENS_HEADER = "x-ratelimit-remaining-tokens"
+private const val RATE_LIMIT_RESET_REQUESTS_HEADER = "x-ratelimit-reset-requests"
+private const val RATE_LIMIT_RESET_TOKENS_HEADER = "x-ratelimit-reset-tokens"
 
 private fun Json.safeErrorMetadata(responseBody: String): GroqErrorMetadata {
     val error = runCatching {
@@ -153,6 +222,27 @@ private fun JsonElement?.safeDiagnosticValue(): String? = runCatching {
             value.length <= MAX_DIAGNOSTIC_VALUE_LENGTH && SAFE_DIAGNOSTIC_VALUE.matches(value)
         }
 }.getOrNull()
+
+private fun String.estimatedTokenCount(): Int =
+    (encodeToByteArray().size + APPROXIMATE_UTF8_BYTES_PER_TOKEN - 1) / APPROXIMATE_UTF8_BYTES_PER_TOKEN
+
+private fun String.safeForProviderLog(apiKey: String): LoggedProviderBody {
+    val redacted = replace(apiKey, REDACTED)
+        .replace(BEARER_CREDENTIAL, "Bearer $REDACTED")
+        .replace(GROQ_API_KEY, REDACTED)
+        .lineSequence()
+        .joinToString(" ") { line -> line.trim() }
+        .trim()
+    return LoggedProviderBody(
+        value = redacted.take(MAX_PROVIDER_BODY_LOG_LENGTH),
+        truncated = redacted.length > MAX_PROVIDER_BODY_LOG_LENGTH,
+    )
+}
+
+private fun Headers.safeValue(name: String): String? =
+    get(name)
+        ?.filterNot(Char::isISOControl)
+        ?.take(MAX_RATE_LIMIT_HEADER_LENGTH)
 
 @Serializable
 private data class GroqChatRequest(

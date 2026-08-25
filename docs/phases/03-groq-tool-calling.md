@@ -242,6 +242,32 @@ Tratar:
 
 Não expor internals ao usuário.
 
+### Provider diagnostics
+
+Antes de cada chamada, `GroqAiProvider` registra somente métricas estruturais do payload efetivamente serializado:
+
+```text
+provider=groq
+model=openai/gpt-oss-20b
+estimatedInputTokens=6421
+systemPromptChars=8120
+toolDefinitionsChars=14350
+conversationMessages=8
+```
+
+`estimatedInputTokens` é uma estimativa heurística e reproduzível: bytes UTF-8 do JSON enviado divididos por 4,
+com arredondamento para cima. Não substitui a contagem oficial do tokenizer do modelo.
+
+Em respostas HTTP de erro, registrar:
+
+- status HTTP, tipo e código retornados pelo provider;
+- body do erro limitado a 8 KiB, com API key e credenciais Bearer redigidas;
+- tamanho original e indicador de truncamento do body;
+- `retry-after`;
+- limites, valores restantes e resets de requests/tokens informados pelos headers `x-ratelimit-*`.
+
+Não registrar o payload, system prompt, mensagens da conversa, definições das tools ou API key.
+
 ## Idempotency
 `create_transaction` deve usar:
 ```text
@@ -255,6 +281,7 @@ Mesmo inbound não pode criar duas transações.
 - serialização Groq;
 - conversão de tool_call;
 - erros HTTP;
+- métricas estruturais do request e diagnósticos seguros de rate limit;
 - resposta sem tool;
 - uma/múltiplas tools;
 - tool desconhecida;

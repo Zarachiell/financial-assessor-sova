@@ -1,5 +1,9 @@
 package com.sova.ai.infrastructure.groq
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.sova.ai.application.AiJsonType
 import com.sova.ai.application.AiMessage
 import com.sova.ai.application.AiMessageRole
@@ -23,6 +27,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.LoggerFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -125,7 +130,7 @@ class GroqAiProviderTest {
     }
 
     @Test
-    fun `maps rate limit and server responses without exposing provider bodies`() = runBlocking {
+    fun `maps rate limit and server responses without exposing bodies through exceptions`() = runBlocking {
         val rateLimited = providerFailure(HttpStatusCode.TooManyRequests, "sensitive rate response")
         val unavailable = providerFailure(HttpStatusCode.BadGateway, "sensitive server response")
 
@@ -133,6 +138,78 @@ class GroqAiProviderTest {
         assertEquals(AiProviderFailure.UNAVAILABLE, unavailable.failure)
         assertFalse(rateLimited.message.orEmpty().contains("sensitive"))
         assertFalse(unavailable.message.orEmpty().contains("sensitive"))
+    }
+
+    @Test
+    fun `logs request sizing and safe rate limit error diagnostics`() = runBlocking {
+        val apiKey = "test-secret-value"
+        val responseBody =
+            """{"error":{"message":"request too large; key=$apiKey","type":"tokens","code":"rate_limit_exceeded"}}"""
+        var capturedRequest: HttpRequestData? = null
+        val client = HttpClient(
+            MockEngine { request ->
+                capturedRequest = request
+                respond(
+                    content = responseBody,
+                    status = HttpStatusCode.TooManyRequests,
+                    headers = headersOf(
+                        HttpHeaders.ContentType to listOf(ContentType.Application.Json.toString()),
+                        "retry-after" to listOf("17"),
+                        "x-ratelimit-limit-requests" to listOf("1000"),
+                        "x-ratelimit-limit-tokens" to listOf("8000"),
+                        "x-ratelimit-remaining-requests" to listOf("998"),
+                        "x-ratelimit-remaining-tokens" to listOf("0"),
+                        "x-ratelimit-reset-requests" to listOf("1h2m"),
+                        "x-ratelimit-reset-tokens" to listOf("17s"),
+                    ),
+                )
+            },
+        )
+        val logger = LoggerFactory.getLogger("com.sova.ai.groq") as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+
+        try {
+            val exception = runCatching {
+                GroqAiProvider(apiKey, "openai/gpt-oss-20b", client).use { provider ->
+                    provider.complete(request())
+                }
+            }.exceptionOrNull()
+            assertEquals(AiProviderFailure.RATE_LIMITED, assertIs<AiProviderException>(exception).failure)
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+
+        val sentBody = requireNotNull(capturedRequest).body.text()
+        val sentJson = Json.parseToJsonElement(sentBody).jsonObject
+        val requestLog = appender.list.single { event -> event.formattedMessage == "Groq request prepared" }
+        val requestFields = requestLog.structuredFields()
+        assertEquals("groq", requestFields["provider"])
+        assertEquals("openai/gpt-oss-20b", requestFields["model"])
+        assertEquals((sentBody.encodeToByteArray().size + 3) / 4, requestFields["estimatedInputTokens"])
+        assertEquals("Use tools locais.".length, requestFields["systemPromptChars"])
+        assertEquals(sentJson.getValue("tools").toString().length, requestFields["toolDefinitionsChars"])
+        assertEquals(2, requestFields["conversationMessages"])
+
+        val errorLog = appender.list.single { event -> event.formattedMessage == "Groq request failed" }
+        val errorFields = errorLog.structuredFields()
+        assertEquals(Level.WARN, errorLog.level)
+        assertEquals(429, errorFields["httpStatus"])
+        assertEquals("tokens", errorFields["providerErrorType"])
+        assertEquals("rate_limit_exceeded", errorFields["providerErrorCode"])
+        assertEquals(responseBody.length, errorFields["providerResponseBodyChars"])
+        assertEquals(false, errorFields["providerResponseBodyTruncated"])
+        assertTrue(errorFields["providerResponseBody"].toString().contains("request too large"))
+        assertTrue(errorFields["providerResponseBody"].toString().contains("[REDACTED]"))
+        assertFalse(errorFields["providerResponseBody"].toString().contains(apiKey))
+        assertEquals("17", errorFields["retryAfter"])
+        assertEquals("1000", errorFields["rateLimitLimitRequests"])
+        assertEquals("8000", errorFields["rateLimitLimitTokens"])
+        assertEquals("998", errorFields["rateLimitRemainingRequests"])
+        assertEquals("0", errorFields["rateLimitRemainingTokens"])
+        assertEquals("1h2m", errorFields["rateLimitResetRequests"])
+        assertEquals("17s", errorFields["rateLimitResetTokens"])
     }
 
     @Test
@@ -214,6 +291,9 @@ class GroqAiProviderTest {
         is OutgoingContent.ByteArrayContent -> bytes().decodeToString()
         else -> error("Expected a byte-array request body")
     }
+
+    private fun ILoggingEvent.structuredFields(): Map<String, Any?> =
+        keyValuePairs.orEmpty().associate { field -> field.key to field.value }
 
     private companion object {
         val jsonHeaders = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
