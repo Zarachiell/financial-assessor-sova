@@ -51,11 +51,17 @@ fun interface ConversationHistory {
     ): List<ConversationMessage>
 }
 
+enum class FamilyRole(val vocative: String) {
+    FATHER("Pai"),
+    MOTHER("Mãe"),
+}
+
 class AiConversationOrchestrator(
     private val provider: AiProvider,
     private val registry: LocalToolRegistry,
     private val dispatcher: LocalToolDispatcher,
     private val history: ConversationHistory,
+    private val familyRolesByUserId: Map<UUID, FamilyRole>,
     private val clock: Clock = Clock.systemUTC(),
     private val zoneId: ZoneId = ZoneId.of(DEFAULT_TIME_ZONE),
     private val maxToolRounds: Int = DEFAULT_MAX_TOOL_ROUNDS,
@@ -69,7 +75,7 @@ class AiConversationOrchestrator(
 
     override suspend fun respond(context: WhatsappConversationContext): String {
         val messages = mutableListOf(
-            AiMessage(AiMessageRole.SYSTEM, systemPrompt()),
+            AiMessage(AiMessageRole.SYSTEM, systemPrompt(context)),
         )
         history.recentMessages(context.userId, context.inboundMessageSid, HISTORY_LIMIT)
             .takeLast(HISTORY_LIMIT)
@@ -276,10 +282,12 @@ class AiConversationOrchestrator(
             "- despesas previstas R$ $expectedExpenses = saldo projetado R$ $projectedBalance."
     }.getOrDefault(GENERIC_LOCAL_FALLBACK)
 
-    private fun systemPrompt(): String {
+    private fun systemPrompt(context: WhatsappConversationContext): String {
         val today = LocalDate.now(clock.withZone(zoneId))
         val currentMonth = YearMonth.from(today)
         val previousMonth = currentMonth.minusMonths(1)
+        val familyRole = familyRolesByUserId[context.userId]
+            ?: throw AiConversationException("Authenticated user has no configured family role")
         return """
             ${systemPersonality.trim()}
 
@@ -293,31 +301,28 @@ class AiConversationOrchestrator(
 
             ## Contexto operacional desta conversa
 
-            Você é o Sova e responde em português brasileiro. Cálculos e dados financeiros vêm somente das tools.
-            Mensagem clara de receita/despesa: chame create_transaction uma vez. Se valor, tipo ou intenção forem
-            ambíguos ("acho", "uns 200"), peça confirmação sem chamar tool. Histórico serve para entender confirmações,
-            nunca para repetir escrita.
+            Quem está falando nesta conversa: ${familyRole.vocative}. Use esse vocativo naturalmente e nunca troque
+            Pai por Mãe ou Mãe por Pai.
+
+            Responda em português brasileiro. Cálculos e dados financeiros vêm somente das tools. Para receita/despesa
+            clara, chame create_transaction uma vez; se valor, tipo ou intenção forem ambíguos ("acho", "uns 200"),
+            confirme antes. Histórico ajuda a entender confirmações, nunca a repetir escrita.
 
             create_transaction: type INCOME/EXPENSE, amount positivo, occurredOn YYYY-MM-DD e nomes de conta/categoria;
-            omita campos opcionais sem valor. Evento futuro ou recorrente usa create_cash_flow_entry, nunca
-            create_transaction: recurrence ONCE/MONTHLY, startDate YYYY-MM-DD, dayOfMonth 1..31 obrigatório para MONTHLY
-            e endDate opcional. Projeções usam get_cash_flow_projection com targetDate YYYY-MM-DD; nunca calcule saldo
-            projetado por conta própria. Em projeções, occurrenceCount é o total combinado de receitas e despesas;
-            use incomeOccurrenceCount e expenseOccurrenceCount para quantidades por tipo e nunca descreva occurrenceCount
-            como quantidade de salários ou de despesas. Categorias de despesa:
+            omita opcionais vazios. Futuro ou recorrente usa create_cash_flow_entry: recurrence ONCE/MONTHLY,
+            startDate YYYY-MM-DD, dayOfMonth 1..31 obrigatório para MONTHLY e endDate opcional. Projeções usam
+            get_cash_flow_projection com targetDate YYYY-MM-DD. occurrenceCount é o total combinado; para quantidades
+            por tipo use incomeOccurrenceCount e expenseOccurrenceCount. Categorias de despesa:
             ${DefaultFinancialCatalog.expenseCategories.keys.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
-            restaurante = Restaurante; reembolso = Reembolso. Nunca envie IDs, SQL ou URLs.
+            restaurante = Restaurante; reembolso = Reembolso.
 
-            Análises abertas usam somente métricas das tools de insights. Para oportunidades de economia, chame em
-            paralelo apenas as tools necessárias, como compare_periods, get_budget_deviations, get_recurring_expenses
-            e get_largest_expenses. Uma meta de economia deve ser enviada como savingsTarget para
-            get_budget_deviations; use exclusivamente o savingsPlan local e declare remainingAmount quando a meta não
-            puder ser atingida pelos cortes calculados. Tendências usam get_expense_trend. Avaliação geral usa
-            get_financial_health_snapshot e nunca cria score. savingsRate e ratios são frações; os campos terminados
-            em Pct são percentuais. Recorrência é heurística: diga "parece recorrente" e cite confidence. Não faça
-            aritmética financeira própria, não transforme ausência de baseline em percentual e não trate projeção como
-            garantia.
+            Análises usam só métricas das tools de insights. Para economia, combine apenas as necessárias entre
+            compare_periods, get_budget_deviations, get_recurring_expenses e get_largest_expenses. Envie metas como
+            savingsTarget; use só savingsPlan e declare remainingAmount. Tendências usam get_expense_trend; avaliação
+            geral usa get_financial_health_snapshot e nunca cria score. savingsRate e ratios são frações; campos Pct são
+            percentuais. Recorrência é heurística: diga "parece recorrente" e cite confidence. Não calcule por conta
+            própria, converta ausência de baseline em percentual nem trate projeção como garantia.
 
             Datas em $DEFAULT_TIME_ZONE: hoje = $today; ontem = ${today.minusDays(1)};
             este mês=${currentMonth.atDay(1)}..${currentMonth.atEndOfMonth()};

@@ -5,6 +5,7 @@ import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.financialLocalTools
 import com.sova.ai.infrastructure.groq.GroqAiProvider
 import com.sova.conversation.application.AiConversationOrchestrator
+import com.sova.conversation.application.FamilyRole
 import com.sova.conversation.infrastructure.persistence.PostgresConversationHistory
 import com.sova.delivery.http.WhatsappHttpDependencies
 import com.sova.delivery.http.configureHttp
@@ -51,10 +52,13 @@ fun main() {
     val financialInsightsService = FinancialInsightsApplicationService(
         repository = PostgresFinancialInsightsRepository(database),
     )
-    val catalogOwner = runBlocking {
-        whatsappRepository.findActiveUser(WhatsappAddress(config.household.users.first().whatsappAddress))
-            ?: error("Configured catalog owner was not provisioned")
+    val authorizedUsers = runBlocking {
+        config.household.users.map { configuredUser ->
+            whatsappRepository.findActiveUser(WhatsappAddress(configuredUser.whatsappAddress))
+                ?: error("Configured WhatsApp user was not provisioned")
+        }
     }
+    val catalogOwner = authorizedUsers.first()
     runBlocking {
         DefaultFinancialCatalogProvisioner(financialService).provision(
             FinancialContext(catalogOwner.householdId, catalogOwner.userId),
@@ -69,6 +73,10 @@ fun main() {
             registry = toolRegistry,
             dispatcher = LocalToolDispatcher(toolRegistry),
             history = PostgresConversationHistory(database),
+            familyRolesByUserId = mapOf(
+                authorizedUsers[0].userId to FamilyRole.FATHER,
+                authorizedUsers[1].userId to FamilyRole.MOTHER,
+            ),
         )
         val whatsapp = WhatsappHttpDependencies(
             expectedAccountSid = config.twilio.accountSid,

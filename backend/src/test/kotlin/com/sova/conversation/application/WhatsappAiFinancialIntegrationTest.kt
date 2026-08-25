@@ -118,6 +118,10 @@ class WhatsappAiFinancialIntegrationTest {
                 registry = registry,
                 dispatcher = LocalToolDispatcher(registry),
                 history = PostgresConversationHistory(database),
+                familyRolesByUserId = mapOf(
+                    userA.userId to FamilyRole.FATHER,
+                    userB.userId to FamilyRole.MOTHER,
+                ),
                 clock = CLOCK,
             )
             val sender = ScenarioSender()

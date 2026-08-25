@@ -54,16 +54,38 @@ class AiConversationOrchestratorTest {
         val messages = provider.requests.single().messages
         val systemPrompt = messages.first().content.orEmpty()
         assertTrue(systemPrompt.contains("puro suco de um beagle"))
+        assertTrue(systemPrompt.contains("Quem está falando nesta conversa: Pai."))
+        assertTrue(systemPrompt.contains("Esse não escapa do meu faro"))
         assertTrue(systemPrompt.contains("fonte da verdade financeira"))
         assertTrue(systemPrompt.contains("única forma autorizada"))
         assertTrue(systemPrompt.contains("hoje = 2026-08-25"))
         assertTrue(systemPrompt.contains("occurrenceCount é o total combinado"))
-        assertTrue(systemPrompt.length <= 7_000, "System prompt exceeded the free-tier token budget guard")
+        assertTrue(
+            systemPrompt.length <= 7_000,
+            "System prompt exceeded the free-tier token budget guard: ${systemPrompt.length} chars",
+        )
         assertEquals(
             listOf(AiMessageRole.SYSTEM, AiMessageRole.USER, AiMessageRole.ASSISTANT, AiMessageRole.USER),
             messages.map { it.role },
         )
         assertEquals("sim", messages.last().content)
+    }
+
+    @Test
+    fun `identifies mother deterministically in the system prompt`() = runBlocking {
+        val provider = QueueAiProvider(listOf(answer("Boa, Mãe. Anotado no meu faro.")))
+        val orchestrator = orchestrator(
+            provider = provider,
+            tools = emptyList(),
+            familyRolesByUserId = mapOf(userId to FamilyRole.MOTHER),
+        ) { emptyList() }
+
+        val result = orchestrator.respond(context("Recebi um reembolso"))
+
+        assertEquals("Boa, Mãe. Anotado no meu faro.", result)
+        val systemPrompt = provider.requests.single().messages.first().content.orEmpty()
+        assertTrue(systemPrompt.contains("Quem está falando nesta conversa: Mãe."))
+        assertFalse(systemPrompt.contains("Quem está falando nesta conversa: Pai."))
     }
 
     @Test
@@ -262,6 +284,7 @@ class AiConversationOrchestratorTest {
         provider: AiProvider,
         tools: List<LocalTool>,
         maxToolRounds: Int = 5,
+        familyRolesByUserId: Map<UUID, FamilyRole> = mapOf(userId to FamilyRole.FATHER),
         history: suspend () -> List<ConversationMessage>,
     ): AiConversationOrchestrator {
         val registry = LocalToolRegistry(tools)
@@ -275,6 +298,7 @@ class AiConversationOrchestratorTest {
                 assertEquals(4, limit)
                 history()
             },
+            familyRolesByUserId = familyRolesByUserId,
             clock = clock,
             maxToolRounds = maxToolRounds,
         )
