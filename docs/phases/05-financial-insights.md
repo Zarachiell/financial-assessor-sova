@@ -2,8 +2,8 @@
 
 ## Status
 
-Implemented locally. Automated backend, PostgreSQL, tool and orchestrator validation, fat JAR and Docker upgrade
-from Flyway V5 to V6 complete; production WhatsApp sandbox validation remains pending.
+Implemented and deployed to production. Automated backend, PostgreSQL, tool and orchestrator validation, fat JAR
+and Docker upgrade from Flyway V5 to V6 are complete; production WhatsApp validation completed on 2026-08-25.
 
 ### Implemented product parameters
 
