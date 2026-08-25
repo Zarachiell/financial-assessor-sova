@@ -88,7 +88,7 @@ SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
 
 SOVA_AI_PROVIDER=groq
 GROQ_API_KEY=<api-key-groq>
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 ```
 
 `GROQ_API_KEY` deve conter somente a chave, sem prefixo `Bearer`. O modelo é configurável, mas precisa suportar local tool calling.

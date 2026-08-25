@@ -121,14 +121,18 @@ class AiConversationOrchestrator(
         } catch (cause: CancellationException) {
             throw cause
         } catch (cause: Exception) {
-            val status = (cause as? AiProviderException)?.failure?.name?.lowercase() ?: "failed"
-            LOGGER.atWarn()
+            val providerFailure = cause as? AiProviderException
+            val status = providerFailure?.failure?.name?.lowercase() ?: "failed"
+            val event = LOGGER.atWarn()
                 .addKeyValue("status", status)
                 .addKeyValue("toolRound", toolRound)
                 .addKeyValue("userId", context.userId)
                 .addKeyValue("householdId", context.householdId)
                 .addKeyValue("durationMs", startedAt.elapsedNow().inWholeMilliseconds)
-                .log("AI interaction failed")
+            providerFailure?.httpStatusCode?.let { event.addKeyValue("providerHttpStatus", it) }
+            providerFailure?.providerErrorType?.let { event.addKeyValue("providerErrorType", it) }
+            providerFailure?.providerErrorCode?.let { event.addKeyValue("providerErrorCode", it) }
+            event.log("AI interaction failed")
             throw cause
         }
     }

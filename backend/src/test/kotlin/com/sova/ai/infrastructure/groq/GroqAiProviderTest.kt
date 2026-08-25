@@ -95,6 +95,28 @@ class GroqAiProviderTest {
     }
 
     @Test
+    fun `retains only safe provider diagnostics from rejected responses`() = runBlocking {
+        val rejected = providerFailure(
+            HttpStatusCode.Forbidden,
+            """
+            {
+              "error": {
+                "message": "sensitive provider explanation",
+                "type": "permission_error",
+                "code": "model_not_permitted"
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(AiProviderFailure.REJECTED_REQUEST, rejected.failure)
+        assertEquals(403, rejected.httpStatusCode)
+        assertEquals("permission_error", rejected.providerErrorType)
+        assertEquals("model_not_permitted", rejected.providerErrorCode)
+        assertFalse(rejected.message.orEmpty().contains("sensitive"))
+    }
+
+    @Test
     fun `rejects malformed provider JSON as an invalid response`() = runBlocking {
         val client = clientResponding("not-json")
 

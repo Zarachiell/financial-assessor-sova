@@ -30,10 +30,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class GroqAiProvider(
     private val apiKey: String,
@@ -54,13 +58,18 @@ class GroqAiProvider(
                 contentType(ContentType.Application.Json)
                 setBody(json.encodeToString(payload))
             }
+            val responseBody = response.bodyAsText()
             when {
-                response.status == HttpStatusCode.TooManyRequests -> fail(AiProviderFailure.RATE_LIMITED)
-                response.status.value in 400..499 -> fail(AiProviderFailure.REJECTED_REQUEST)
-                response.status.value >= 500 -> fail(AiProviderFailure.UNAVAILABLE)
-                response.status.value !in 200..299 -> fail(AiProviderFailure.UNAVAILABLE)
+                response.status == HttpStatusCode.TooManyRequests ->
+                    fail(AiProviderFailure.RATE_LIMITED, response.status, responseBody)
+                response.status.value in 400..499 ->
+                    fail(AiProviderFailure.REJECTED_REQUEST, response.status, responseBody)
+                response.status.value >= 500 ->
+                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody)
+                response.status.value !in 200..299 ->
+                    fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody)
             }
-            return json.decodeFromString<GroqChatResponse>(response.bodyAsText()).toAiResponse()
+            return json.decodeFromString<GroqChatResponse>(responseBody).toAiResponse()
         } catch (cause: CancellationException) {
             throw cause
         } catch (cause: AiProviderException) {
@@ -84,7 +93,19 @@ class GroqAiProvider(
         client.close()
     }
 
-    private fun fail(failure: AiProviderFailure): Nothing = throw AiProviderException(failure)
+    private fun fail(
+        failure: AiProviderFailure,
+        status: HttpStatusCode,
+        responseBody: String,
+    ): Nothing {
+        val error = json.safeErrorMetadata(responseBody)
+        throw AiProviderException(
+            failure = failure,
+            httpStatusCode = status.value,
+            providerErrorType = error.type,
+            providerErrorCode = error.code,
+        )
+    }
 
     private companion object {
         const val CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -106,6 +127,31 @@ class GroqAiProvider(
         }
     }
 }
+
+private data class GroqErrorMetadata(
+    val type: String? = null,
+    val code: String? = null,
+)
+
+private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 64
+private val SAFE_DIAGNOSTIC_VALUE = Regex("^[A-Za-z0-9._-]+$")
+
+private fun Json.safeErrorMetadata(responseBody: String): GroqErrorMetadata {
+    val error = runCatching {
+        parseToJsonElement(responseBody).jsonObject["error"]?.jsonObject
+    }.getOrNull() ?: return GroqErrorMetadata()
+    return GroqErrorMetadata(
+        type = error["type"].safeDiagnosticValue(),
+        code = error["code"].safeDiagnosticValue(),
+    )
+}
+
+private fun JsonElement?.safeDiagnosticValue(): String? = runCatching {
+    this?.jsonPrimitive?.contentOrNull
+        ?.takeIf { value ->
+            value.length <= MAX_DIAGNOSTIC_VALUE_LENGTH && SAFE_DIAGNOSTIC_VALUE.matches(value)
+        }
+}.getOrNull()
 
 @Serializable
 private data class GroqChatRequest(

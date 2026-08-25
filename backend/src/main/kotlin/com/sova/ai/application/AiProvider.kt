@@ -104,4 +104,7 @@ enum class AiProviderFailure {
 class AiProviderException(
     val failure: AiProviderFailure,
     cause: Throwable? = null,
+    val httpStatusCode: Int? = null,
+    val providerErrorType: String? = null,
+    val providerErrorCode: String? = null,
 ) : RuntimeException("AI provider failed: ${failure.name.lowercase()}", cause)
