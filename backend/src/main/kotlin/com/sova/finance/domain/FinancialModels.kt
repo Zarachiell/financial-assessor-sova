@@ -64,6 +64,12 @@ enum class FinancialEntryType {
     EXPENSE,
 }
 
+enum class ExpenseNature {
+    FIXED,
+    DISCRETIONARY,
+    UNCLASSIFIED,
+}
+
 enum class AccountType {
     CHECKING,
     SAVINGS,
@@ -112,6 +118,7 @@ data class Category(
     val active: Boolean,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val expenseNature: ExpenseNature = ExpenseNature.UNCLASSIFIED,
 )
 
 data class Transaction(

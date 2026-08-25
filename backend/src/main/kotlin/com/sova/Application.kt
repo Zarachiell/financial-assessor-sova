@@ -12,6 +12,8 @@ import com.sova.finance.application.DefaultFinancialCatalogProvisioner
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.infrastructure.persistence.PostgresFinancialRepository
+import com.sova.finance.insights.application.FinancialInsightsApplicationService
+import com.sova.finance.insights.infrastructure.persistence.PostgresFinancialInsightsRepository
 import com.sova.shared.config.AppConfig
 import com.sova.shared.infrastructure.database.PostgresDatabase
 import com.sova.whatsapp.application.HandleWhatsappTextMessage
@@ -46,6 +48,9 @@ fun main() {
         repository = PostgresFinancialRepository(database),
         maxProjectionMonths = config.cashFlow.maxProjectionMonths,
     )
+    val financialInsightsService = FinancialInsightsApplicationService(
+        repository = PostgresFinancialInsightsRepository(database),
+    )
     val catalogOwner = runBlocking {
         whatsappRepository.findActiveUser(WhatsappAddress(config.household.users.first().whatsappAddress))
             ?: error("Configured catalog owner was not provisioned")
@@ -58,7 +63,7 @@ fun main() {
 
     val senderAddress = WhatsappAddress(config.twilio.whatsappSender)
     GroqAiProvider(config.ai.apiKey, config.ai.model).use { provider ->
-        val toolRegistry = LocalToolRegistry(financialLocalTools(financialService))
+        val toolRegistry = LocalToolRegistry(financialLocalTools(financialService, financialInsightsService))
         val conversation = AiConversationOrchestrator(
             provider = provider,
             registry = toolRegistry,

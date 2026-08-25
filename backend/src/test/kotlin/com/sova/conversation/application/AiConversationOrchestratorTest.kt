@@ -95,6 +95,67 @@ class AiConversationOrchestratorTest {
     }
 
     @Test
+    fun `open savings question combines analytic tools and returns only minimal local results`() = runBlocking {
+        val comparison = RecordingTool("compare_periods")
+        val deviations = RecordingTool("get_budget_deviations")
+        val recurring = RecordingTool("get_recurring_expenses")
+        val largest = RecordingTool("get_largest_expenses")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(
+                    AiToolCall("call-comparison", "compare_periods", "{}"),
+                    AiToolCall("call-deviations", "get_budget_deviations", "{}"),
+                    AiToolCall("call-recurring", "get_recurring_expenses", "{}"),
+                    AiToolCall("call-largest", "get_largest_expenses", "{}"),
+                ),
+                answer("Restaurantes e lazer são as oportunidades fundamentadas nos dados locais."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(comparison, deviations, recurring, largest)) { emptyList() }
+
+        val response = orchestrator.respond(context("Onde podemos economizar este mês?"))
+
+        assertEquals("Restaurantes e lazer são as oportunidades fundamentadas nos dados locais.", response)
+        assertEquals(4, listOf(comparison, deviations, recurring, largest).sumOf { it.executions.size })
+        val finalRequest = provider.requests.last()
+        assertTrue(finalRequest.tools.isEmpty())
+        val localResults = finalRequest.messages.filter { it.role == AiMessageRole.TOOL }.mapNotNull { it.content }
+        assertEquals(4, localResults.size)
+        assertTrue(localResults.none { it.contains("transactions", ignoreCase = true) })
+        assertTrue(finalRequest.messages.first().content.orEmpty().contains("nunca cria score"))
+    }
+
+    @Test
+    fun `analytic response accepts only monetary and percentage facts returned by tools`() = runBlocking {
+        val groundedProvider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-insight", "get_financial_snapshot", "{}")),
+                answer("A renda foi de R$ 13 250,00 e as despesas de R$ 100,00, uma alta de 25%."),
+            ),
+        )
+        val grounded = orchestrator(groundedProvider, listOf(GroundedAnalyticTool())) { emptyList() }
+        val ungroundedProvider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-insight", "get_financial_snapshot", "{}")),
+                answer("As despesas foram de 999 reais."),
+            ),
+        )
+        val ungrounded = orchestrator(ungroundedProvider, listOf(GroundedAnalyticTool())) { emptyList() }
+
+        assertEquals(
+            "A renda foi de R$ 13 250,00 e as despesas de R$ 100,00, uma alta de 25%.",
+            grounded.respond(context("Analise.")),
+        )
+        val rejected = ungrounded.respond(context("Analise."))
+        assertEquals(
+            "Não consegui validar todos os valores da análise com segurança. Reformule a pergunta para eu consultar " +
+                "os dados novamente.",
+            rejected,
+        )
+        assertFalse(rejected.contains("999"))
+    }
+
+    @Test
     fun `unknown tool is rejected without local execution`() = runBlocking {
         val known = RecordingTool("get_current_balance")
         val provider = QueueAiProvider(
@@ -299,6 +360,23 @@ private class RecordingTool(name: String) : LocalTool {
             put("ok", JsonPrimitive(true))
             put("value", JsonPrimitive(definition.name))
         }
+    }
+}
+
+private class GroundedAnalyticTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "get_financial_snapshot",
+        description = "Returns grounded local metrics.",
+        parameters = AiToolParameters(
+            properties = mapOf("from" to AiToolParameter(AiJsonType.STRING, "Optional period start.")),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject = buildJsonObject {
+        put("ok", JsonPrimitive(true))
+        put("totalIncome", JsonPrimitive("13250.00".toBigDecimal()))
+        put("totalExpenses", JsonPrimitive("100.00".toBigDecimal()))
+        put("percentageChange", JsonPrimitive("25.00".toBigDecimal()))
     }
 }
 

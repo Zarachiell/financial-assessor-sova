@@ -1,7 +1,33 @@
 # Phase 05 — Financial Insights
 
 ## Status
-Planned.
+
+Implemented locally. Automated backend, PostgreSQL, tool and orchestrator validation, fat JAR and Docker upgrade
+from Flyway V5 to V6 complete; production WhatsApp sandbox validation remains pending.
+
+### Implemented product parameters
+
+- tendência `STABLE`: variação absoluta menor que `5%`;
+- baseline de desvio: média dos 3 meses completos anteriores ao período atual;
+- severidade: `LOW < 10%`, `MEDIUM 10%..25%`, `HIGH > 25%`;
+- projeção mensal: ritmo diário, disponível a partir de 5 dias observados;
+- maiores despesas: no máximo 20 itens por chamada;
+- plano de economia: somente categorias `DISCRETIONARY`, limitado a 30% do gasto atual de cada categoria;
+- categorias padrão fixas: `Moradia` e `Saúde`;
+- categorias padrão discricionárias: `Restaurante`, `Lazer` e `Compras`;
+- demais categorias começam como `UNCLASSIFIED`.
+
+### Recurring-expense heuristic
+
+A detecção agrupa despesas pela mesma categoria e por descrição normalizada (caixa, acentos, pontuação e
+sequências numéricas). Um candidato precisa ter ao menos duas datas distintas, intervalos de 21 a 40 dias e
+variação máxima de 20% no valor. Intervalos de 25 a 35 dias e variação de até 10% elevam a confiança:
+
+- `HIGH`: ao menos 4 ocorrências, intervalos fortes e valor estável;
+- `MEDIUM`: ao menos 3 ocorrências fortes e estáveis, ou 4 ocorrências com intervalo mensal aproximado;
+- `LOW`: demais candidatos que ainda respeitam os limites mínimos.
+
+O resultado sempre é apresentado como inferência, nunca como assinatura confirmada.
 
 ## 1. Objective
 

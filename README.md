@@ -133,11 +133,12 @@ Antes de alterar comportamento ou arquitetura, consultar:
 3. Núcleo financeiro
 4. Groq + local tool calling
 5. Fluxo de caixa
-6. Áudio
-7. Imagem
-8. Importação de extratos
-9. Dashboard
-10. IA self-hosted
+6. Financial insights
+7. Áudio
+8. Imagem
+9. Importação de extratos
+10. Dashboard
+11. IA self-hosted
 
 Não avançar automaticamente entre fases.
 
@@ -278,4 +279,8 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 ## Status
 
-Fase 4 — fluxo de caixa implementada e validada localmente. Além das operações financeiras já disponíveis pelo WhatsApp, o Sova registra receitas e despesas futuras `ONCE`/`MONTHLY` e calcula projeções determinísticas no backend. Os testes automatizados usam provider fake e cobrem recorrência, meses curtos, horizonte, filtros, desativação, isolamento, autoria e idempotência sem chamar Groq ou Twilio reais.
+Fase 5 — financial insights implementada localmente. O Sova calcula snapshots, comparações, tendências,
+maiores despesas, recorrências heurísticas, desvios, taxa de poupança, projeção mensal e planos simples de
+economia no backend/PostgreSQL. O Groq recebe apenas métricas agregadas para explicá-las. Classificações de
+despesas, limites, thresholds e isolamento por household possuem cobertura automatizada sem chamadas reais ao
+Groq ou à Twilio.

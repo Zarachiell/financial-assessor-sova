@@ -15,6 +15,7 @@ import com.sova.finance.domain.FinancialSource
 import com.sova.finance.domain.Money
 import com.sova.finance.domain.SourceReferenceId
 import com.sova.finance.domain.Transaction
+import com.sova.finance.insights.application.FinancialInsightsApplicationService
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,7 +31,10 @@ import java.text.Normalizer
 import java.time.LocalDate
 import java.util.Locale
 
-fun financialLocalTools(service: FinancialApplicationService): List<LocalTool> = listOf(
+fun financialLocalTools(
+    service: FinancialApplicationService,
+    insightsService: FinancialInsightsApplicationService? = null,
+): List<LocalTool> = listOf(
     CreateTransactionTool(service),
     GetCurrentBalanceTool(service),
     GetExpensesTool(service),
@@ -39,7 +43,7 @@ fun financialLocalTools(service: FinancialApplicationService): List<LocalTool> =
     GetCategorySummaryTool(service),
     CreateCashFlowEntryTool(service),
     GetCashFlowProjectionTool(service),
-)
+) + insightsService?.let { financialInsightTools(service, it) }.orEmpty()
 
 class CreateTransactionTool(
     service: FinancialApplicationService,

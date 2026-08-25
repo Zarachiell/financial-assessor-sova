@@ -11,6 +11,7 @@ import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.Currency
+import com.sova.finance.domain.ExpenseNature
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.domain.FinancialDescription
 import com.sova.finance.domain.FinancialEntryType
@@ -118,8 +119,8 @@ class PostgresFinancialRepository(
         sql.execute(
             """
             INSERT INTO categories
-                (id, household_id, created_by_user_id, name, type, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ), CAST(? AS TIMESTAMPTZ))
+                (id, household_id, created_by_user_id, name, type, active, created_at, updated_at, expense_nature)
+            VALUES (?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ), CAST(? AS TIMESTAMPTZ), ?)
             ON CONFLICT DO NOTHING
             """.trimIndent(),
             category.id,
@@ -130,6 +131,7 @@ class PostgresFinancialRepository(
             category.active,
             category.createdAt.toString(),
             category.updatedAt.toString(),
+            category.expenseNature.name,
         ) == 1
     }
 
@@ -366,6 +368,7 @@ private fun Record.toCategory(): Category = Category(
     active = required("active", Boolean::class.java),
     createdAt = required("created_at", OffsetDateTime::class.java).toInstant(),
     updatedAt = required("updated_at", OffsetDateTime::class.java).toInstant(),
+    expenseNature = ExpenseNature.valueOf(required("expense_nature", String::class.java)),
 )
 
 private fun Record.toTransaction(): Transaction = Transaction(

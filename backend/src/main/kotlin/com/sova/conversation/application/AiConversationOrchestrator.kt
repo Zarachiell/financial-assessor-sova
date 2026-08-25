@@ -16,6 +16,10 @@ import com.sova.whatsapp.application.WhatsappConversationContext
 import com.sova.whatsapp.application.WhatsappTextConversation
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -99,6 +103,9 @@ class AiConversationOrchestrator(
             if (response.toolCalls.isEmpty()) {
                 val finalText = response.content?.trim().orEmpty()
                 if (finalText.isBlank()) throw AiConversationException("AI returned an empty response")
+                if (!isGroundedAnalyticResponse(finalText, completedBatch, context)) {
+                    return UNGROUNDED_ANALYTIC_FALLBACK
+                }
                 return finalText.take(MAX_OUTBOUND_MESSAGE_LENGTH)
             }
             if (availableTools.isEmpty() && completedBatch.isNotEmpty()) {
@@ -194,6 +201,36 @@ class AiConversationOrchestrator(
             ?: GENERIC_LOCAL_FALLBACK
     }
 
+    private fun isGroundedAnalyticResponse(
+        response: String,
+        executions: List<CompletedToolExecution>,
+        context: WhatsappConversationContext,
+    ): Boolean {
+        val analyticExecutions = executions.filter { it.name in ANALYTIC_TOOLS }
+        if (analyticExecutions.isEmpty()) return true
+        val grounding = analyticExecutions.fold(ResponseGrounding()) { accumulated, execution ->
+            val content = runCatching { JSON.parseToJsonElement(execution.result.content) }.getOrNull()
+            if (content == null) accumulated else accumulated + content.groundingNumbers()
+        }
+        val ungroundedMoney = MONEY_CLAIM.findAll(response)
+            .mapNotNull { match ->
+                (match.groups[1]?.value ?: match.groups[2]?.value)?.asLocalizedDecimal()
+            }
+            .any { claim -> claim.moneyScale() !in grounding.money }
+        val ungroundedPercentage = PERCENTAGE_CLAIM.findAll(response)
+            .mapNotNull { match -> match.groups[1]?.value?.asLocalizedDecimal() }
+            .any { claim -> claim.percentageScale() !in grounding.percentages }
+        if (!ungroundedMoney && !ungroundedPercentage) return true
+
+        LOGGER.atWarn()
+            .addKeyValue("status", "ungrounded_analytic_response")
+            .addKeyValue("toolNames", analyticExecutions.joinToString(",") { it.name })
+            .addKeyValue("userId", context.userId)
+            .addKeyValue("householdId", context.householdId)
+            .log("AI analytic response rejected by local grounding guard")
+        return false
+    }
+
     private fun transactionFallback(execution: CompletedToolExecution): String = runCatching {
         val content = JSON.parseToJsonElement(execution.result.content).jsonObject
         require(content.getValue("ok").jsonPrimitive.boolean)
@@ -267,9 +304,20 @@ class AiConversationOrchestrator(
             e endDate opcional. Projeções usam get_cash_flow_projection com targetDate YYYY-MM-DD; nunca calcule saldo
             projetado por conta própria. Em projeções, occurrenceCount é o total combinado de receitas e despesas;
             use incomeOccurrenceCount e expenseOccurrenceCount para quantidades por tipo e nunca descreva occurrenceCount
-            como quantidade de salários ou de despesas. Categorias de despesa: ${DefaultFinancialCatalog.expenseCategories.joinToString()}.
+            como quantidade de salários ou de despesas. Categorias de despesa:
+            ${DefaultFinancialCatalog.expenseCategories.keys.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
             restaurante = Restaurante; reembolso = Reembolso. Nunca envie IDs, SQL ou URLs.
+
+            Análises abertas usam somente métricas das tools de insights. Para oportunidades de economia, chame em
+            paralelo apenas as tools necessárias, como compare_periods, get_budget_deviations, get_recurring_expenses
+            e get_largest_expenses. Uma meta de economia deve ser enviada como savingsTarget para
+            get_budget_deviations; use exclusivamente o savingsPlan local e declare remainingAmount quando a meta não
+            puder ser atingida pelos cortes calculados. Tendências usam get_expense_trend. Avaliação geral usa
+            get_financial_health_snapshot e nunca cria score. savingsRate e ratios são frações; os campos terminados
+            em Pct são percentuais. Recorrência é heurística: diga "parece recorrente" e cite confidence. Não faça
+            aritmética financeira própria, não transforme ausência de baseline em percentual e não trate projeção como
+            garantia.
 
             Datas em $DEFAULT_TIME_ZONE: hoje = $today; ontem = ${today.minusDays(1)};
             este mês=${currentMonth.atDay(1)}..${currentMonth.atEndOfMonth()};
@@ -296,9 +344,25 @@ class AiConversationOrchestrator(
         const val CREATE_CASH_FLOW_ENTRY_TOOL = "create_cash_flow_entry"
         const val GET_CASH_FLOW_PROJECTION_TOOL = "get_cash_flow_projection"
         val PERSISTED_WRITE_TOOLS = setOf(CREATE_TRANSACTION_TOOL, CREATE_CASH_FLOW_ENTRY_TOOL)
+        val ANALYTIC_TOOLS = setOf(
+            "get_financial_snapshot",
+            "compare_periods",
+            "get_expense_trend",
+            "get_largest_expenses",
+            "get_recurring_expenses",
+            "get_budget_deviations",
+            "get_financial_health_snapshot",
+        )
         const val GENERIC_LOCAL_FALLBACK =
             "A operação financeira foi concluída localmente, mas a resposta detalhada ficou indisponível. " +
                 "Se foi um registro, não envie novamente; consulte os dados em instantes."
+        const val UNGROUNDED_ANALYTIC_FALLBACK =
+            "Não consegui validar todos os valores da análise com segurança. Reformule a pergunta para eu consultar " +
+                "os dados novamente."
+        const val LOCALIZED_NUMBER =
+            "-?(?:[0-9]{1,3}(?:[. ][0-9]{3})+(?:,[0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)"
+        val MONEY_CLAIM = Regex("(?i)(?:R\\$\\s*($LOCALIZED_NUMBER)|($LOCALIZED_NUMBER)\\s*reais\\b)")
+        val PERCENTAGE_CLAIM = Regex("($LOCALIZED_NUMBER)\\s*%")
         val DISPLAY_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
         val JSON = Json { ignoreUnknownKeys = true }
         val LOGGER = LoggerFactory.getLogger("com.sova.ai.interaction")
@@ -316,6 +380,70 @@ private fun BigDecimal.asBrazilianMoney(): String = setScale(2).toPlainString().
 
 private fun kotlinx.serialization.json.JsonElement.moneyContent(): String =
     jsonPrimitive.content.toBigDecimal().asBrazilianMoney()
+
+private data class ResponseGrounding(
+    val money: Set<BigDecimal> = emptySet(),
+    val percentages: Set<BigDecimal> = emptySet(),
+) {
+    operator fun plus(other: ResponseGrounding): ResponseGrounding = ResponseGrounding(
+        money = money + other.money,
+        percentages = percentages + other.percentages,
+    )
+}
+
+private fun JsonElement.groundingNumbers(fieldName: String? = null): ResponseGrounding = when (this) {
+    is JsonObject -> entries.fold(ResponseGrounding()) { accumulated, (name, value) ->
+        accumulated + value.groundingNumbers(name)
+    }
+    is JsonArray -> fold(ResponseGrounding()) { accumulated, value ->
+        accumulated + value.groundingNumbers(fieldName)
+    }
+    is JsonPrimitive -> {
+        val number = takeUnless(JsonPrimitive::isString)?.content?.toBigDecimalOrNull()
+            ?: return ResponseGrounding()
+        val normalizedName = fieldName?.lowercase().orEmpty()
+        ResponseGrounding(
+            money = if (normalizedName.isMoneyField()) setOf(number.moneyScale()) else emptySet(),
+            percentages = if (normalizedName.isPercentageField()) {
+                setOf(number.percentageScale())
+            } else {
+                emptySet()
+            },
+        )
+    }
+}
+
+private fun String.isMoneyField(): Boolean =
+    MONEY_CONTAINED_FIELDS.any(::contains) || endsWith("income") || endsWith("expense") || endsWith("expenses")
+
+private fun String.isPercentageField(): Boolean = contains("percentage") || endsWith("pct")
+
+private fun String.asLocalizedDecimal(): BigDecimal? {
+    val compact = replace(" ", "")
+    val normalized = when {
+        compact.contains(',') -> compact.replace(".", "").replace(',', '.')
+        compact.matches(BRAZILIAN_GROUPED_INTEGER) -> compact.replace(".", "")
+        else -> compact
+    }
+    return normalized.toBigDecimalOrNull()
+}
+
+private fun BigDecimal.moneyScale(): BigDecimal = setScale(2)
+
+private fun BigDecimal.percentageScale(): BigDecimal = setScale(2)
+
+private val MONEY_CONTAINED_FIELDS = listOf(
+    "amount",
+    "total",
+    "balance",
+    "expenses",
+    "cashflow",
+    "cut",
+    "average",
+    "absolutechange",
+)
+
+private val BRAZILIAN_GROUPED_INTEGER = Regex("[0-9]{1,3}(?:\\.[0-9]{3})+")
 
 private fun loadPrompt(fileName: String): String = requireNotNull(
     AiConversationOrchestrator::class.java.getResourceAsStream("/prompts/$fileName"),

@@ -3,6 +3,7 @@ package com.sova.ai.application
 import com.sova.finance.application.DefaultFinancialCatalogProvisioner
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.application.FinancialResult
+import com.sova.finance.domain.ExpenseNature
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.domain.FinancialEntryType
 import com.sova.finance.domain.FinancialSource
@@ -33,6 +34,11 @@ class FinancialToolsIntegrationTest {
     @Test
     fun `all financial tools execute locally with shared household authorship and idempotency`() = runBlocking {
         withFixture { fixture ->
+            val catalog = fixture.service.listCategories(fixture.userA).successValue().associateBy { it.name.value }
+            assertEquals(ExpenseNature.FIXED, catalog.getValue("Moradia").expenseNature)
+            assertEquals(ExpenseNature.DISCRETIONARY, catalog.getValue("Restaurante").expenseNature)
+            assertEquals(ExpenseNature.UNCLASSIFIED, catalog.getValue("Alimentação").expenseNature)
+
             val expense = fixture.dispatch(
                 "create_transaction",
                 """

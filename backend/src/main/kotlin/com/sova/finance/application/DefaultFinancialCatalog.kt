@@ -3,21 +3,22 @@ package com.sova.finance.application
 import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CategoryName
+import com.sova.finance.domain.ExpenseNature
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.domain.FinancialEntryType
 
 object DefaultFinancialCatalog {
     const val ACCOUNT_NAME = "Conta principal"
 
-    val expenseCategories = listOf(
-        "Alimentação",
-        "Restaurante",
-        "Moradia",
-        "Transporte",
-        "Saúde",
-        "Lazer",
-        "Compras",
-        "Outros",
+    val expenseCategories = linkedMapOf(
+        "Alimentação" to ExpenseNature.UNCLASSIFIED,
+        "Restaurante" to ExpenseNature.DISCRETIONARY,
+        "Moradia" to ExpenseNature.FIXED,
+        "Transporte" to ExpenseNature.UNCLASSIFIED,
+        "Saúde" to ExpenseNature.FIXED,
+        "Lazer" to ExpenseNature.DISCRETIONARY,
+        "Compras" to ExpenseNature.DISCRETIONARY,
+        "Outros" to ExpenseNature.UNCLASSIFIED,
     )
 
     val incomeCategories = listOf(
@@ -48,8 +49,8 @@ class DefaultFinancialCatalogProvisioner(
 
         val categories = service.listCategories(context).requiredValue()
         if (categories.none { it.active && it.type == FinancialEntryType.EXPENSE }) {
-            DefaultFinancialCatalog.expenseCategories.forEach { name ->
-                createCategory(context, name, FinancialEntryType.EXPENSE)
+            DefaultFinancialCatalog.expenseCategories.forEach { (name, nature) ->
+                createCategory(context, name, FinancialEntryType.EXPENSE, nature)
             }
             requireActiveCategory(context, FinancialEntryType.EXPENSE)
         }
@@ -65,10 +66,11 @@ class DefaultFinancialCatalogProvisioner(
         context: FinancialContext,
         name: String,
         type: FinancialEntryType,
+        expenseNature: ExpenseNature = ExpenseNature.UNCLASSIFIED,
     ) {
         service.createCategory(
             context,
-            CreateCategoryCommand(CategoryName.of(name), type),
+            CreateCategoryCommand(CategoryName.of(name), type, expenseNature),
         ).requireCreatedOrDuplicate(FinancialRejection.DUPLICATE_CATEGORY_NAME)
     }
 

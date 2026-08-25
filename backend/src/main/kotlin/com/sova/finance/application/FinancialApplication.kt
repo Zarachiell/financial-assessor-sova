@@ -10,6 +10,7 @@ import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.Currency
+import com.sova.finance.domain.ExpenseNature
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.domain.FinancialDescription
 import com.sova.finance.domain.FinancialEntryType
@@ -32,6 +33,7 @@ data class CreateAccountCommand(
 data class CreateCategoryCommand(
     val name: CategoryName,
     val type: FinancialEntryType,
+    val expenseNature: ExpenseNature = ExpenseNature.UNCLASSIFIED,
 )
 
 data class CreateTransactionCommand(
@@ -232,6 +234,9 @@ class FinancialApplicationService(
         command: CreateCategoryCommand,
     ): FinancialResult<Creation<Category>> {
         if (!repository.isActiveMember(context)) return unauthorized()
+        require(command.type == FinancialEntryType.EXPENSE || command.expenseNature == ExpenseNature.UNCLASSIFIED) {
+            "Income categories must be unclassified"
+        }
         if (repository.findCategoryByName(context.householdId, command.type, command.name) != null) {
             return rejected(FinancialRejection.DUPLICATE_CATEGORY_NAME)
         }
@@ -246,6 +251,7 @@ class FinancialApplicationService(
             active = true,
             createdAt = now,
             updatedAt = now,
+            expenseNature = command.expenseNature,
         )
         if (!repository.insertCategory(category)) {
             return rejected(FinancialRejection.DUPLICATE_CATEGORY_NAME)
