@@ -74,15 +74,15 @@ class GroqAiProviderTest {
         val properties = parameters.getValue("properties").jsonObject
         assertTrue("account" in properties)
         assertEquals(
-            listOf("string", "null"),
-            properties.getValue("account").jsonObject.getValue("type").jsonArray.map { it.jsonPrimitive.content },
+            "string",
+            properties.getValue("account").jsonObject.getValue("type").jsonPrimitive.content,
         )
         assertEquals(
-            listOf("account", "type"),
+            listOf("type"),
             parameters.getValue("required").jsonArray.map { it.jsonPrimitive.content },
         )
         assertEquals(
-            listOf("INCOME", "EXPENSE", "null"),
+            listOf("INCOME", "EXPENSE"),
             properties.getValue("type").jsonObject.getValue("enum").jsonArray.map { it.jsonPrimitive.content },
         )
         assertFalse("userId" in properties)
@@ -273,6 +273,7 @@ class GroqAiProviderTest {
                             enumValues = listOf("INCOME", "EXPENSE"),
                         ),
                     ),
+                    required = setOf("type"),
                 ),
             ),
         ),

@@ -32,7 +32,6 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -341,14 +340,7 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
                             buildJsonObject {
                                 put(
                                     "type",
-                                    if (name in parameters.required) {
-                                        JsonPrimitive(parameter.type.wireName)
-                                    } else {
-                                        buildJsonArray {
-                                            add(JsonPrimitive(parameter.type.wireName))
-                                            add(JsonNull)
-                                        }
-                                    },
+                                    JsonPrimitive(parameter.type.wireName),
                                 )
                                 put("description", JsonPrimitive(parameter.description))
                                 if (parameter.enumValues.isNotEmpty()) {
@@ -356,7 +348,6 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
                                         "enum",
                                         buildJsonArray {
                                             parameter.enumValues.forEach { add(JsonPrimitive(it)) }
-                                            if (name !in parameters.required) add(JsonNull)
                                         },
                                     )
                                 }
@@ -368,7 +359,9 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
             put(
                 "required",
                 buildJsonArray {
-                    parameters.properties.keys.forEach { add(JsonPrimitive(it)) }
+                    parameters.properties.keys
+                        .filter(parameters.required::contains)
+                        .forEach { add(JsonPrimitive(it)) }
                 },
             )
             put("additionalProperties", JsonPrimitive(false))
