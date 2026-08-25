@@ -338,16 +338,37 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
                         put(
                             name,
                             buildJsonObject {
-                                put(
-                                    "type",
-                                    JsonPrimitive(parameter.type.wireName),
-                                )
                                 put("description", JsonPrimitive(parameter.description))
-                                if (parameter.enumValues.isNotEmpty()) {
+                                if (name in parameters.required) {
+                                    put("type", JsonPrimitive(parameter.type.wireName))
+                                    if (parameter.enumValues.isNotEmpty()) {
+                                        put(
+                                            "enum",
+                                            buildJsonArray {
+                                                parameter.enumValues.forEach { add(JsonPrimitive(it)) }
+                                            },
+                                        )
+                                    }
+                                } else {
                                     put(
-                                        "enum",
+                                        "anyOf",
                                         buildJsonArray {
-                                            parameter.enumValues.forEach { add(JsonPrimitive(it)) }
+                                            add(
+                                                buildJsonObject {
+                                                    put("type", JsonPrimitive(parameter.type.wireName))
+                                                    if (parameter.enumValues.isNotEmpty()) {
+                                                        put(
+                                                            "enum",
+                                                            buildJsonArray {
+                                                                parameter.enumValues.forEach {
+                                                                    add(JsonPrimitive(it))
+                                                                }
+                                                            },
+                                                        )
+                                                    }
+                                                },
+                                            )
+                                            add(buildJsonObject { put("type", JsonPrimitive("null")) })
                                         },
                                     )
                                 }

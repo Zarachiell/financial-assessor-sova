@@ -73,14 +73,19 @@ class GroqAiProviderTest {
         assertFalse(parameters.getValue("additionalProperties").jsonPrimitive.content.toBoolean())
         val properties = parameters.getValue("properties").jsonObject
         assertTrue("account" in properties)
+        val accountSchema = properties.getValue("account").jsonObject
+        assertFalse("type" in accountSchema)
         assertEquals(
-            "string",
-            properties.getValue("account").jsonObject.getValue("type").jsonPrimitive.content,
+            listOf("string", "null"),
+            accountSchema.getValue("anyOf").jsonArray.map { variant ->
+                variant.jsonObject.getValue("type").jsonPrimitive.content
+            },
         )
         assertEquals(
             listOf("type"),
             parameters.getValue("required").jsonArray.map { it.jsonPrimitive.content },
         )
+        assertEquals("string", properties.getValue("type").jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals(
             listOf("INCOME", "EXPENSE"),
             properties.getValue("type").jsonObject.getValue("enum").jsonArray.map { it.jsonPrimitive.content },
