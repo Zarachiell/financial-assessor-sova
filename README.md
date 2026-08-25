@@ -181,13 +181,9 @@ SOVA_USER_A_NAME
 SOVA_USER_A_WHATSAPP
 SOVA_USER_B_NAME
 SOVA_USER_B_WHATSAPP
-```
-
-Variáveis previstas para a fase de IA:
-
-```text
 GROQ_API_KEY
 SOVA_AI_PROVIDER
+GROQ_MODEL
 ```
 
 O repositório deverá possuir apenas `.env.example`.
@@ -233,11 +229,14 @@ Copie `.env.example` para `.env` quando precisar alterar os padrões. Não versi
 - use uma senha forte em `DATABASE_PASSWORD`;
 - configure `SOVA_ADDRESS` com o domínio público;
 - substitua todas as configurações locais da Twilio e dos dois usuários;
+- configure `SOVA_AI_PROVIDER=groq`, `GROQ_API_KEY` e um `GROQ_MODEL` compatível com tool calling;
 - exponha `SOVA_HTTP_PORT=80` e `SOVA_HTTPS_PORT=443` para o Caddy emitir e renovar certificados HTTPS automaticamente.
 
 ### WhatsApp / Twilio
 
 O startup provisiona um household e exatamente dois usuários autorizados a partir das variáveis `SOVA_HOUSEHOLD_NAME`, `SOVA_USER_A_*` e `SOVA_USER_B_*`. Números anteriormente provisionados que não fazem mais parte dessa configuração são desativados.
+
+Quando ainda não existem dados financeiros ativos, o startup também cria a conta `Conta principal` e um catálogo básico de categorias de despesa e receita. Contas e categorias já existentes são preservadas.
 
 Para identidades móveis brasileiras, o lookup trata os formatos com e sem o nono dígito como o mesmo usuário. O endereço bruto recebido da Twilio continua preservado nas mensagens para auditoria; a equivalência é usada somente na autorização do remetente.
 
@@ -253,7 +252,7 @@ Um sender da Twilio possui uma configuração principal de webhook inbound. Se o
 
 ### Backend sem Docker
 
-Com JDK 21 e um PostgreSQL acessível, exporte `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD` e todas as variáveis Twilio/provisioning listadas em `.env.example`. Depois execute:
+Com JDK 21 e um PostgreSQL acessível, exporte as variáveis de banco, Twilio, provisioning e Groq listadas em `.env.example`. Depois execute:
 
 ```bash
 cd backend
@@ -279,4 +278,4 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 ## Status
 
-Fase 2 — Núcleo financeiro implementada e validada localmente. Contas, categorias, transações e lançamentos pontuais de fluxo de caixa estão disponíveis pela API interna de aplicação, com isolamento por household, autoria e persistência PostgreSQL. O fluxo real `ping -> pong` foi confirmado para User A; as validações manuais de User B e remetente não autorizado permanecem pendentes. A interpretação por IA e os comandos financeiros via WhatsApp permanecem para as fases seguintes.
+Fase 3 — Groq + local tool calling implementada e validada localmente. Mensagens textuais do WhatsApp passam por um `AiProvider`, mas toda consulta, cálculo e persistência financeira é executada por tools locais com contexto autenticado. Os testes automatizados usam provider fake e cobrem despesas, receitas, saldo, gastos, transações, categorias, idempotência e falhas seguras sem chamar Groq ou Twilio reais.

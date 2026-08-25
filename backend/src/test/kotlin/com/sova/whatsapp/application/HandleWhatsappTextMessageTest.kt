@@ -9,6 +9,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -78,6 +79,51 @@ class HandleWhatsappTextMessageTest {
         handler.handle(message("SM-NEUTRAL", userA.address, "Quanto gastei?"))
 
         assertEquals("Mensagem recebida. Nesta fase, envie \"ping\" para testar.", sender.sent.single().second)
+    }
+
+    @Test
+    fun `financial conversation receives authenticated context after inbound persistence`() = runBlocking {
+        val repository = InMemoryWhatsappRepository(userA)
+        val sender = RecordingWhatsappSender()
+        var captured: WhatsappConversationContext? = null
+        val handler = HandleWhatsappTextMessage(
+            repository = repository,
+            senderAddress = senderAddress,
+            sender = sender,
+            clock = clock,
+            conversation = WhatsappTextConversation { context ->
+                assertTrue("SM-FINANCE" in repository.inbound)
+                captured = context
+                "Resposta financeira"
+            },
+        )
+
+        handler.handle(message("SM-FINANCE", userA.address, "Qual nosso saldo?"))
+
+        assertEquals(householdId, captured?.householdId)
+        assertEquals(userA.userId, captured?.userId)
+        assertEquals("SM-FINANCE", captured?.inboundMessageSid)
+        assertEquals("Qual nosso saldo?", captured?.text)
+        assertEquals("Resposta financeira", sender.sent.single().second)
+    }
+
+    @Test
+    fun `conversation failure returns a safe response without internal details`() = runBlocking {
+        val repository = InMemoryWhatsappRepository(userA)
+        val sender = RecordingWhatsappSender()
+        val handler = HandleWhatsappTextMessage(
+            repository = repository,
+            senderAddress = senderAddress,
+            sender = sender,
+            clock = clock,
+            conversation = WhatsappTextConversation { error("secret provider response") },
+        )
+
+        handler.handle(message("SM-FAIL", userA.address, "Qual nosso saldo?"))
+
+        val response = sender.sent.single().second
+        assertEquals("Não consegui processar sua mensagem agora. Tente novamente em instantes.", response)
+        assertFalse(response.contains("secret"))
     }
 
     private fun authorizedUser(id: String, phoneNumber: String) = AuthorizedWhatsappUser(

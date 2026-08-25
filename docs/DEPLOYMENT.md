@@ -85,7 +85,13 @@ SOVA_USER_A_NAME=<nome>
 SOVA_USER_A_WHATSAPP=whatsapp:+55<ddd><numero>
 SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
+
+SOVA_AI_PROVIDER=groq
+GROQ_API_KEY=<api-key-groq>
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
+
+`GROQ_API_KEY` deve conter somente a chave, sem prefixo `Bearer`. O modelo é configurável, mas precisa suportar local tool calling.
 
 O workflow cria ou atualiza `/opt/sova/shared/.env` com permissão `600`. Não é necessário criar esse arquivo manualmente.
 

@@ -1,12 +1,14 @@
 package com.sova.shared.config
 
 import com.sova.whatsapp.domain.WhatsappAddress
+import java.util.Locale
 
 data class AppConfig(
     val http: HttpConfig,
     val database: DatabaseConfig,
     val twilio: TwilioConfig,
     val household: HouseholdProvisioningConfig,
+    val ai: AiConfig,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig =
@@ -38,7 +40,18 @@ data class AppConfig(
                         ),
                     ),
                 ),
+                ai = AiConfig(
+                    provider = environment.required("SOVA_AI_PROVIDER").lowercase(Locale.ROOT).also { provider ->
+                        require(provider == SUPPORTED_AI_PROVIDER) {
+                            "Environment variable SOVA_AI_PROVIDER must be groq"
+                        }
+                    },
+                    apiKey = environment.required("GROQ_API_KEY"),
+                    model = environment.required("GROQ_MODEL"),
+                ),
             )
+
+        private const val SUPPORTED_AI_PROVIDER = "groq"
     }
 }
 
@@ -57,6 +70,12 @@ data class TwilioConfig(
     val accountSid: String,
     val authToken: String,
     val whatsappSender: String,
+)
+
+data class AiConfig(
+    val provider: String,
+    val apiKey: String,
+    val model: String,
 )
 
 data class HouseholdProvisioningConfig(

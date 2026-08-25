@@ -91,6 +91,9 @@ jobs:
           SOVA_USER_A_WHATSAPP: ${{ secrets.SOVA_USER_A_WHATSAPP }}
           SOVA_USER_B_NAME: ${{ secrets.SOVA_USER_B_NAME }}
           SOVA_USER_B_WHATSAPP: ${{ secrets.SOVA_USER_B_WHATSAPP }}
+          SOVA_AI_PROVIDER: ${{ secrets.SOVA_AI_PROVIDER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
         run: |
           set -euo pipefail
           umask 077
@@ -123,6 +126,9 @@ jobs:
             SOVA_USER_A_WHATSAPP
             SOVA_USER_B_NAME
             SOVA_USER_B_WHATSAPP
+            SOVA_AI_PROVIDER
+            GROQ_API_KEY
+            GROQ_MODEL
           )
 
           for secret_name in "${required_secrets[@]}"; do

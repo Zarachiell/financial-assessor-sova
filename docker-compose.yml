@@ -37,6 +37,9 @@ services:
       SOVA_USER_A_WHATSAPP: ${SOVA_USER_A_WHATSAPP:-whatsapp:+15550000001}
       SOVA_USER_B_NAME: ${SOVA_USER_B_NAME:-User B}
       SOVA_USER_B_WHATSAPP: ${SOVA_USER_B_WHATSAPP:-whatsapp:+15550000002}
+      SOVA_AI_PROVIDER: ${SOVA_AI_PROVIDER:-groq}
+      GROQ_API_KEY: ${GROQ_API_KEY:-local_test_groq_api_key}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
     depends_on:
       postgres:
         condition: service_healthy

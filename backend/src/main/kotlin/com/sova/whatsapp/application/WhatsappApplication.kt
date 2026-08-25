@@ -3,6 +3,8 @@ package com.sova.whatsapp.application
 import com.sova.whatsapp.domain.AuthorizedWhatsappUser
 import com.sova.whatsapp.domain.WhatsappAddress
 import com.sova.whatsapp.domain.WhatsappMessageDirection
+import kotlinx.coroutines.CancellationException
+import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -64,6 +66,17 @@ fun interface WhatsappWebhookHandler {
     suspend fun handle(message: InboundWhatsappMessage): WhatsappHandlingResult
 }
 
+data class WhatsappConversationContext(
+    val householdId: UUID,
+    val userId: UUID,
+    val inboundMessageSid: String,
+    val text: String,
+)
+
+fun interface WhatsappTextConversation {
+    suspend fun respond(context: WhatsappConversationContext): String
+}
+
 sealed interface WhatsappHandlingResult {
     data class Processed(
         val userId: UUID,
@@ -84,6 +97,7 @@ class HandleWhatsappTextMessage(
     private val senderAddress: WhatsappAddress,
     private val sender: WhatsappMessageSender,
     private val clock: Clock = Clock.systemUTC(),
+    private val conversation: WhatsappTextConversation = WhatsappTextConversation { NEUTRAL_RESPONSE },
 ) : WhatsappWebhookHandler {
     override suspend fun handle(message: InboundWhatsappMessage): WhatsappHandlingResult {
         val user = repository.findActiveUser(message.from) ?: return WhatsappHandlingResult.Unauthorized
@@ -106,7 +120,14 @@ class HandleWhatsappTextMessage(
         val responseBody = if (message.body.trim().equals("ping", ignoreCase = true)) {
             "pong"
         } else {
-            NEUTRAL_RESPONSE
+            safelyRespond(
+                WhatsappConversationContext(
+                    householdId = user.householdId,
+                    userId = user.userId,
+                    inboundMessageSid = message.messageSid,
+                    text = message.body,
+                ),
+            )
         }
         val sendResult = sender.send(message.from, responseBody)
         repository.saveOutbound(
@@ -128,8 +149,24 @@ class HandleWhatsappTextMessage(
         )
     }
 
+    private suspend fun safelyRespond(context: WhatsappConversationContext): String = try {
+        conversation.respond(context).takeIf(String::isNotBlank) ?: SAFE_FAILURE_RESPONSE
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (cause: Exception) {
+        LOGGER.atWarn()
+            .setCause(cause)
+            .addKeyValue("messageSid", context.inboundMessageSid)
+            .addKeyValue("userId", context.userId)
+            .addKeyValue("householdId", context.householdId)
+            .log("WhatsApp conversation failed")
+        SAFE_FAILURE_RESPONSE
+    }
+
     private companion object {
         const val NEUTRAL_RESPONSE = "Mensagem recebida. Nesta fase, envie \"ping\" para testar."
+        const val SAFE_FAILURE_RESPONSE = "Não consegui processar sua mensagem agora. Tente novamente em instantes."
+        val LOGGER = LoggerFactory.getLogger("com.sova.whatsapp.conversation")
     }
 }
 

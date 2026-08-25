@@ -106,28 +106,29 @@ Transformar linguagem natural em comandos de domínio.
 
 ### Entregáveis
 
-- [ ] interface `AiProvider`
-- [ ] `GroqAiProvider`
-- [ ] modelo de mensagens
-- [ ] modelo de tool definitions
-- [ ] tool registry
-- [ ] tool dispatcher
-- [ ] validação de argumentos
-- [ ] `create_transaction`
-- [ ] `get_expenses`
-- [ ] `get_income`
-- [ ] `get_transactions`
-- [ ] `get_current_balance`
-- [ ] resposta natural final
-- [ ] logs de AI interactions sem secrets
+- [x] interface `AiProvider`
+- [x] `GroqAiProvider`
+- [x] modelo de mensagens
+- [x] modelo de tool definitions
+- [x] tool registry
+- [x] tool dispatcher
+- [x] validação de argumentos
+- [x] `create_transaction`
+- [x] `get_expenses`
+- [x] `get_income`
+- [x] `get_transactions`
+- [x] `get_current_balance`
+- [x] `get_category_summary`
+- [x] resposta natural final
+- [x] logs de AI interactions sem secrets
 
 ### Casos obrigatórios
 
-- [ ] "Gastei 32 reais no almoço hoje"
-- [ ] "Recebi 500 reais"
-- [ ] "Quanto gastamos este mês?"
-- [ ] "Quanto gastamos com restaurante?"
-- [ ] "Qual nosso saldo?"
+- [x] "Gastei 32 reais no almoço hoje"
+- [x] "Recebi 500 reais"
+- [x] "Quanto gastamos este mês?"
+- [x] "Quanto gastamos com restaurante?"
+- [x] "Qual nosso saldo?"
 
 ### Definição de pronto
 

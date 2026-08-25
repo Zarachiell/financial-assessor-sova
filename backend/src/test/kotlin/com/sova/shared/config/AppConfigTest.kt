@@ -17,6 +17,9 @@ class AppConfigTest {
         "SOVA_USER_A_WHATSAPP" to "whatsapp:+15550000001",
         "SOVA_USER_B_NAME" to "User B",
         "SOVA_USER_B_WHATSAPP" to "whatsapp:+15550000002",
+        "SOVA_AI_PROVIDER" to "groq",
+        "GROQ_API_KEY" to "test-api-key",
+        "GROQ_MODEL" to "test-tool-model",
     )
 
     @Test
@@ -45,6 +48,22 @@ class AppConfigTest {
             listOf("whatsapp:+15550000001", "whatsapp:+15550000002"),
             config.household.users.map { it.whatsappAddress },
         )
+    }
+
+    @Test
+    fun `loads Groq provider configuration`() {
+        val config = AppConfig.fromEnvironment(requiredEnvironment)
+
+        assertEquals("groq", config.ai.provider)
+        assertEquals("test-api-key", config.ai.apiKey)
+        assertEquals("test-tool-model", config.ai.model)
+    }
+
+    @Test
+    fun `rejects unsupported AI provider`() {
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_AI_PROVIDER" to "remote-mcp"))
+        }
     }
 
     @Test

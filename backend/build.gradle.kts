@@ -32,6 +32,9 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages")
     implementation("io.ktor:ktor-serialization-kotlinx-json")
 
+    implementation("io.ktor:ktor-client-core")
+    implementation("io.ktor:ktor-client-cio")
+
     implementation("com.twilio.sdk:twilio:12.1.1")
 
     implementation("org.flywaydb:flyway-core:13.0.0")
@@ -43,6 +46,7 @@ dependencies {
     runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.1")
 
     testImplementation("io.ktor:ktor-server-test-host")
+    testImplementation("io.ktor:ktor-client-mock")
     testImplementation(platform("io.zonky.test.postgres:embedded-postgres-binaries-bom:18.3.0"))
     testImplementation("io.zonky.test:embedded-postgres:2.2.2")
     testImplementation(kotlin("test"))

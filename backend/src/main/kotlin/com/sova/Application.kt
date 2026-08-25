@@ -1,7 +1,17 @@
 package com.sova
 
+import com.sova.ai.application.LocalToolDispatcher
+import com.sova.ai.application.LocalToolRegistry
+import com.sova.ai.application.financialLocalTools
+import com.sova.ai.infrastructure.groq.GroqAiProvider
+import com.sova.conversation.application.AiConversationOrchestrator
+import com.sova.conversation.infrastructure.persistence.PostgresConversationHistory
 import com.sova.delivery.http.WhatsappHttpDependencies
 import com.sova.delivery.http.configureHttp
+import com.sova.finance.application.DefaultFinancialCatalogProvisioner
+import com.sova.finance.application.FinancialApplicationService
+import com.sova.finance.domain.FinancialContext
+import com.sova.finance.infrastructure.persistence.PostgresFinancialRepository
 import com.sova.shared.config.AppConfig
 import com.sova.shared.infrastructure.database.PostgresDatabase
 import com.sova.whatsapp.application.HandleWhatsappTextMessage
@@ -32,25 +42,46 @@ fun main() {
             ),
         )
     }
-    val senderAddress = WhatsappAddress(config.twilio.whatsappSender)
-    val whatsapp = WhatsappHttpDependencies(
-        expectedAccountSid = config.twilio.accountSid,
-        expectedSenderAddress = senderAddress,
-        signatureValidator = TwilioWebhookSignatureValidator(config.twilio.authToken),
-        handler = HandleWhatsappTextMessage(
-            repository = whatsappRepository,
-            senderAddress = senderAddress,
-            sender = TwilioWhatsappMessageSender(senderAddress, config.twilio),
-        ),
-    )
+    val financialService = FinancialApplicationService(PostgresFinancialRepository(database))
+    val catalogOwner = runBlocking {
+        whatsappRepository.findActiveUser(WhatsappAddress(config.household.users.first().whatsappAddress))
+            ?: error("Configured catalog owner was not provisioned")
+    }
+    runBlocking {
+        DefaultFinancialCatalogProvisioner(financialService).provision(
+            FinancialContext(catalogOwner.householdId, catalogOwner.userId),
+        )
+    }
 
-    embeddedServer(
-        factory = Netty,
-        host = config.http.host,
-        port = config.http.port,
-    ) {
-        module(database, whatsapp)
-    }.start(wait = true)
+    val senderAddress = WhatsappAddress(config.twilio.whatsappSender)
+    GroqAiProvider(config.ai.apiKey, config.ai.model).use { provider ->
+        val toolRegistry = LocalToolRegistry(financialLocalTools(financialService))
+        val conversation = AiConversationOrchestrator(
+            provider = provider,
+            registry = toolRegistry,
+            dispatcher = LocalToolDispatcher(toolRegistry),
+            history = PostgresConversationHistory(database),
+        )
+        val whatsapp = WhatsappHttpDependencies(
+            expectedAccountSid = config.twilio.accountSid,
+            expectedSenderAddress = senderAddress,
+            signatureValidator = TwilioWebhookSignatureValidator(config.twilio.authToken),
+            handler = HandleWhatsappTextMessage(
+                repository = whatsappRepository,
+                senderAddress = senderAddress,
+                sender = TwilioWhatsappMessageSender(senderAddress, config.twilio),
+                conversation = conversation,
+            ),
+        )
+
+        embeddedServer(
+            factory = Netty,
+            host = config.http.host,
+            port = config.http.port,
+        ) {
+            module(database, whatsapp)
+        }.start(wait = true)
+    }
 }
 
 fun Application.module(
