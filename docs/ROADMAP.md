@@ -80,17 +80,17 @@ Persistir informações financeiras sem IA.
 
 ### Entregáveis
 
-- [ ] Household
-- [ ] User
-- [ ] WhatsappIdentity
-- [ ] Account
-- [ ] Category
-- [ ] Transaction
-- [ ] CashFlowEntry
-- [ ] repositories
-- [ ] services/handlers
-- [ ] migrations
-- [ ] testes de domínio
+- [x] Household
+- [x] User
+- [x] WhatsappIdentity
+- [x] Account
+- [x] Category
+- [x] Transaction
+- [x] CashFlowEntry
+- [x] repositories
+- [x] services/handlers
+- [x] migrations
+- [x] testes de domínio
 
 ### Definição de pronto
 

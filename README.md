@@ -279,4 +279,4 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 ## Status
 
-Fase 1 — WhatsApp textual implementada e validada automaticamente. A validação manual no Twilio Sandbox com os dois números reais permanece pendente. IA e domínio financeiro continuam fora do escopo até as fases seguintes.
+Fase 2 — Núcleo financeiro implementada e validada localmente. Contas, categorias, transações e lançamentos pontuais de fluxo de caixa estão disponíveis pela API interna de aplicação, com isolamento por household, autoria e persistência PostgreSQL. O fluxo real `ping -> pong` foi confirmado para User A; as validações manuais de User B e remetente não autorizado permanecem pendentes. A interpretação por IA e os comandos financeiros via WhatsApp permanecem para as fases seguintes.

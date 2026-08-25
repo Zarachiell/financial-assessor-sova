@@ -1,7 +1,7 @@
 # Phase 01 — WhatsApp Text
 
 ## Status
-Implemented with automated validation complete. Manual Twilio Sandbox validation pending.
+Implemented with automated validation complete. Real Twilio validation passed for User A; User B and an unauthorized sender remain pending.
 
 ## Objective
 Permitir que os dois usuários autorizados enviem mensagens textuais ao Sova via WhatsApp/Twilio e recebam resposta.
@@ -284,7 +284,7 @@ Migrations aplicam, os dois usuários podem ser provisionados, webhook funciona,
 
 ## Manual Sandbox Validation
 
-Status: pending real Twilio credentials, the two authorized phone numbers, and a webhook strategy that does not divert the sender already used by the other bot.
+Status: partially complete on 2026-08-24. The production webhook and real Twilio sender returned `pong` to User A. User B and an unauthorized sender still require manual validation.
 
 User A:
 ```text
@@ -302,10 +302,10 @@ Número não autorizado:
 
 Checklist:
 
-- [ ] User A recebe `pong`;
+- [x] User A recebe `pong`;
 - [ ] User B recebe `pong`;
 - [ ] número não autorizado não recebe informação privada;
-- [ ] logs do teste não expõem secrets.
+- [x] logs do teste não expõem secrets.
 
 ## Codex instruction
 > Implemente `docs/phases/01-whatsapp-text.md`. Respeite `AGENTS.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md` e ADRs aplicáveis. Não implemente Groq, domínio financeiro, áudio, imagem ou fases posteriores. Use testes/fakes para Twilio. Ao finalizar, reporte cada AC como PASS ou FAIL, migrations criadas, testes executados e divergências encontradas.

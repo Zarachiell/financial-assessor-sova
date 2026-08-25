@@ -2,6 +2,8 @@ package com.sova.shared.infrastructure.database
 
 import com.sova.shared.config.DatabaseConfig
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
+import org.flywaydb.core.Flyway
+import org.flywaydb.core.api.MigrationVersion
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,7 +37,42 @@ class PostgresDatabaseIntegrationTest {
                         "select count(*) from flyway_schema_history where success",
                     ).use { result ->
                         assertTrue(result.next())
-                        assertEquals(3, result.getInt(1))
+                        assertEquals(4, result.getInt(1))
+                    }
+                }
+            }
+
+            DriverManager.getConnection(config.url, config.user, config.password).use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("CREATE DATABASE phase_one")
+                }
+            }
+            val phaseOneConfig = DatabaseConfig(
+                url = postgres.getJdbcUrl("postgres", "phase_one"),
+                user = "postgres",
+                password = "",
+            )
+            Flyway.configure()
+                .dataSource(phaseOneConfig.url, phaseOneConfig.user, phaseOneConfig.password)
+                .locations("classpath:db/migration")
+                .target(MigrationVersion.fromVersion("3"))
+                .load()
+                .migrate()
+
+            PostgresDatabase(phaseOneConfig).migrate()
+
+            DriverManager.getConnection(phaseOneConfig.url, phaseOneConfig.user, phaseOneConfig.password).use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery(
+                        """
+                        SELECT count(*)
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name IN ('accounts', 'categories', 'transactions', 'cash_flow_entries')
+                        """.trimIndent(),
+                    ).use { result ->
+                        assertTrue(result.next())
+                        assertEquals(4, result.getInt(1))
                     }
                 }
             }
