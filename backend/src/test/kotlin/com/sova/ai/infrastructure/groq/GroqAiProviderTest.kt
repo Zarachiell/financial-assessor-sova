@@ -43,7 +43,7 @@ class GroqAiProviderTest {
                 )
             },
         )
-        val response = GroqAiProvider("test-secret", "test-model", client).use { provider ->
+        val response = GroqAiProvider("test-secret", "openai/gpt-oss-120b", client).use { provider ->
             provider.complete(request())
         }
 
@@ -57,16 +57,57 @@ class GroqAiProviderTest {
         assertEquals("/openai/v1/chat/completions", sent.url.encodedPath)
         assertEquals("Bearer test-secret", sent.headers[HttpHeaders.Authorization])
         val body = Json.parseToJsonElement(sent.body.text()).jsonObject
-        assertEquals("test-model", body.getValue("model").jsonPrimitive.content)
+        assertEquals("openai/gpt-oss-120b", body.getValue("model").jsonPrimitive.content)
         assertEquals("auto", body.getValue("tool_choice").jsonPrimitive.content)
+        assertEquals("low", body.getValue("reasoning_effort").jsonPrimitive.content)
+        assertEquals("hidden", body.getValue("reasoning_format").jsonPrimitive.content)
+        assertEquals("512", body.getValue("max_completion_tokens").jsonPrimitive.content)
         val function = body.getValue("tools").jsonArray.single().jsonObject.getValue("function").jsonObject
         assertEquals("get_current_balance", function.getValue("name").jsonPrimitive.content)
         val parameters = function.getValue("parameters").jsonObject
         assertFalse(parameters.getValue("additionalProperties").jsonPrimitive.content.toBoolean())
         val properties = parameters.getValue("properties").jsonObject
         assertTrue("account" in properties)
+        assertEquals(
+            listOf("string", "null"),
+            properties.getValue("account").jsonObject.getValue("type").jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(
+            listOf("account", "type"),
+            parameters.getValue("required").jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(
+            listOf("INCOME", "EXPENSE", "null"),
+            properties.getValue("type").jsonObject.getValue("enum").jsonArray.map { it.jsonPrimitive.content },
+        )
         assertFalse("userId" in properties)
         assertFalse("householdId" in properties)
+    }
+
+    @Test
+    fun `omits tool schemas when requesting only the final answer`() = runBlocking {
+        var capturedRequest: HttpRequestData? = null
+        val client = HttpClient(
+            MockEngine { request ->
+                capturedRequest = request
+                respond(
+                    content = """{"choices":[{"message":{"role":"assistant","content":"Registrado."}}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        GroqAiProvider("test-secret", "test-model", client).use { provider ->
+            provider.complete(request().copy(tools = emptyList()))
+        }
+
+        val body = Json.parseToJsonElement(requireNotNull(capturedRequest).body.text()).jsonObject
+        assertFalse("tools" in body)
+        assertFalse("tool_choice" in body)
+        assertFalse("parallel_tool_calls" in body)
+        assertFalse("reasoning_effort" in body)
+        assertFalse("reasoning_format" in body)
     }
 
     @Test
@@ -149,6 +190,11 @@ class GroqAiProviderTest {
                 parameters = AiToolParameters(
                     properties = mapOf(
                         "account" to AiToolParameter(AiJsonType.STRING, "Nome opcional da conta."),
+                        "type" to AiToolParameter(
+                            AiJsonType.STRING,
+                            "Tipo opcional.",
+                            enumValues = listOf("INCOME", "EXPENSE"),
+                        ),
                     ),
                 ),
             ),

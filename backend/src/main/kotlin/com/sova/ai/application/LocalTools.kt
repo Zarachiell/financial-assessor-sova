@@ -3,6 +3,7 @@ package com.sova.ai.application
 import com.sova.finance.domain.FinancialContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -123,6 +124,7 @@ private fun AiToolParameters.accepts(arguments: JsonObject): Boolean {
     if (required.any { it !in arguments }) return false
     return arguments.all { (name, value) ->
         val parameter = properties.getValue(name)
+        if (value is JsonNull) return@all name !in required
         val primitive = value as? JsonPrimitive ?: return@all false
         if (primitive.booleanOrNull != null) return@all false
         val matchesType = when (parameter.type) {

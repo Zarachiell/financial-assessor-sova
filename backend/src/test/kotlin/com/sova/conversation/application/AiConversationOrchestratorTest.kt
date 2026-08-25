@@ -4,6 +4,8 @@ import com.sova.ai.application.AiJsonType
 import com.sova.ai.application.AiMessage
 import com.sova.ai.application.AiMessageRole
 import com.sova.ai.application.AiProvider
+import com.sova.ai.application.AiProviderException
+import com.sova.ai.application.AiProviderFailure
 import com.sova.ai.application.AiRequest
 import com.sova.ai.application.AiResponse
 import com.sova.ai.application.AiToolCall
@@ -14,6 +16,7 @@ import com.sova.ai.application.LocalTool
 import com.sova.ai.application.LocalToolDispatcher
 import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.ToolExecutionContext
+import com.sova.ai.application.ToolRejectedException
 import com.sova.whatsapp.application.WhatsappConversationContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
@@ -54,6 +57,7 @@ class AiConversationOrchestratorTest {
         assertTrue(systemPrompt.contains("fonte da verdade financeira"))
         assertTrue(systemPrompt.contains("única forma autorizada"))
         assertTrue(systemPrompt.contains("hoje = 2026-08-25"))
+        assertTrue(systemPrompt.length <= 7_000, "System prompt exceeded the free-tier token budget guard")
         assertEquals(
             listOf(AiMessageRole.SYSTEM, AiMessageRole.USER, AiMessageRole.ASSISTANT, AiMessageRole.USER),
             messages.map { it.role },
@@ -86,6 +90,7 @@ class AiConversationOrchestratorTest {
         assertEquals("SM-INBOUND", balance.executions.single().inboundMessageSid)
         val toolMessages = provider.requests.last().messages.filter { it.role == AiMessageRole.TOOL }
         assertEquals(listOf("call-balance", "call-expenses"), toolMessages.map { it.toolCallId })
+        assertTrue(provider.requests.last().tools.isEmpty())
     }
 
     @Test
@@ -126,7 +131,7 @@ class AiConversationOrchestratorTest {
 
     @Test
     fun `stops when the provider exceeds the maximum tool rounds`() = runBlocking {
-        val tool = RecordingTool("get_current_balance")
+        val tool = RejectingRecordingTool()
         val provider = GeneratingToolProvider()
         val orchestrator = orchestrator(provider, listOf(tool), maxToolRounds = 2) { emptyList() }
 
@@ -135,6 +140,24 @@ class AiConversationOrchestratorTest {
         assertIs<AiConversationException>(failure)
         assertEquals(2, tool.executions.size)
         assertEquals(3, provider.requests.size)
+    }
+
+    @Test
+    fun `acknowledges a persisted transaction locally when the final provider response fails`() = runBlocking {
+        val tool = SuccessfulTransactionTool()
+        val provider = ToolThenRateLimitedProvider()
+        val orchestrator = orchestrator(provider, listOf(tool)) { emptyList() }
+
+        val response = orchestrator.respond(context("Gastei 32 reais no almoço hoje"))
+
+        assertEquals(
+            "Registrado com sucesso: despesa de R$ 32,00 em Alimentação, em 25/08/2026. 🐾 " +
+                "Não envie novamente; a resposta detalhada ficou indisponível.",
+            response,
+        )
+        assertEquals(1, tool.executionCount)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests.last().tools.isEmpty())
     }
 
     private fun orchestrator(
@@ -151,7 +174,7 @@ class AiConversationOrchestratorTest {
             history = ConversationHistory { requestedUserId, excludedSid, limit ->
                 assertEquals(userId, requestedUserId)
                 assertEquals("SM-INBOUND", excludedSid)
-                assertEquals(6, limit)
+                assertEquals(4, limit)
                 history()
             },
             clock = clock,
@@ -199,6 +222,28 @@ private class GeneratingToolProvider : AiProvider {
     }
 }
 
+private class ToolThenRateLimitedProvider : AiProvider {
+    val requests = mutableListOf<AiRequest>()
+
+    override suspend fun complete(request: AiRequest): AiResponse {
+        requests += request
+        if (requests.size == 1) {
+            return AiResponse(
+                AiMessage(
+                    role = AiMessageRole.ASSISTANT,
+                    toolCalls = listOf(AiToolCall("call-create", "create_transaction", "{}")),
+                ),
+            )
+        }
+        throw AiProviderException(
+            failure = AiProviderFailure.RATE_LIMITED,
+            httpStatusCode = 429,
+            providerErrorType = "tokens",
+            providerErrorCode = "rate_limit_exceeded",
+        )
+    }
+}
+
 private class RecordingTool(name: String) : LocalTool {
     override val definition = AiToolDefinition(
         name = name,
@@ -215,6 +260,42 @@ private class RecordingTool(name: String) : LocalTool {
             put("ok", JsonPrimitive(true))
             put("value", JsonPrimitive(definition.name))
         }
+    }
+}
+
+private class RejectingRecordingTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "get_current_balance",
+        description = "Always rejects for max-round testing.",
+        parameters = AiToolParameters(
+            properties = mapOf("account" to AiToolParameter(AiJsonType.STRING, "Optional account.")),
+        ),
+    )
+    val executions = mutableListOf<ToolExecutionContext>()
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        executions += context
+        throw ToolRejectedException("retryable_test_rejection")
+    }
+}
+
+private class SuccessfulTransactionTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "create_transaction",
+        description = "Creates a test transaction.",
+        parameters = AiToolParameters(
+            properties = mapOf("account" to AiToolParameter(AiJsonType.STRING, "Optional account.")),
+        ),
+    )
+    var executionCount: Int = 0
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject = buildJsonObject {
+        executionCount += 1
+        put("ok", JsonPrimitive(true))
+        put("type", JsonPrimitive("EXPENSE"))
+        put("amount", JsonPrimitive("32.00"))
+        put("category", JsonPrimitive("Alimentação"))
+        put("occurredOn", JsonPrimitive("2026-08-25"))
     }
 }
 

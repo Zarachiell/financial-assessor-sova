@@ -75,11 +75,10 @@ data class AiToolDefinition(
 
 data class AiRequest(
     val messages: List<AiMessage>,
-    val tools: List<AiToolDefinition>,
+    val tools: List<AiToolDefinition> = emptyList(),
 ) {
     init {
         require(messages.isNotEmpty()) { "AI request requires at least one message" }
-        require(tools.isNotEmpty()) { "AI request requires at least one tool" }
     }
 }
 

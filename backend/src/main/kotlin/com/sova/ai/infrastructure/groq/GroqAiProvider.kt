@@ -31,6 +31,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -157,11 +158,13 @@ private fun JsonElement?.safeDiagnosticValue(): String? = runCatching {
 private data class GroqChatRequest(
     val model: String,
     val messages: List<GroqRequestMessage>,
-    val tools: List<GroqToolDefinition>,
-    @SerialName("tool_choice") val toolChoice: String = "auto",
-    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean = true,
+    val tools: List<GroqToolDefinition>? = null,
+    @SerialName("tool_choice") val toolChoice: String? = null,
+    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
+    @SerialName("reasoning_format") val reasoningFormat: String? = null,
     val temperature: Double = 0.1,
-    @SerialName("max_completion_tokens") val maxCompletionTokens: Int = 1_024,
+    @SerialName("max_completion_tokens") val maxCompletionTokens: Int = 512,
 )
 
 @Serializable
@@ -214,7 +217,11 @@ private data class GroqResponseMessage(
 private fun AiRequest.toGroqRequest(model: String): GroqChatRequest = GroqChatRequest(
     model = model,
     messages = messages.map(AiMessage::toGroqMessage),
-    tools = tools.map(AiToolDefinition::toGroqDefinition),
+    tools = tools.takeIf(List<*>::isNotEmpty)?.map(AiToolDefinition::toGroqDefinition),
+    toolChoice = "auto".takeIf { tools.isNotEmpty() },
+    parallelToolCalls = true.takeIf { tools.isNotEmpty() },
+    reasoningEffort = "low".takeIf { model.startsWith(GPT_OSS_MODEL_PREFIX) },
+    reasoningFormat = "hidden".takeIf { model.startsWith(GPT_OSS_MODEL_PREFIX) },
 )
 
 private fun AiMessage.toGroqMessage(): GroqRequestMessage = GroqRequestMessage(
@@ -242,13 +249,24 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
                         put(
                             name,
                             buildJsonObject {
-                                put("type", JsonPrimitive(parameter.type.wireName))
+                                put(
+                                    "type",
+                                    if (name in parameters.required) {
+                                        JsonPrimitive(parameter.type.wireName)
+                                    } else {
+                                        buildJsonArray {
+                                            add(JsonPrimitive(parameter.type.wireName))
+                                            add(JsonNull)
+                                        }
+                                    },
+                                )
                                 put("description", JsonPrimitive(parameter.description))
                                 if (parameter.enumValues.isNotEmpty()) {
                                     put(
                                         "enum",
                                         buildJsonArray {
                                             parameter.enumValues.forEach { add(JsonPrimitive(it)) }
+                                            if (name !in parameters.required) add(JsonNull)
                                         },
                                     )
                                 }
@@ -260,7 +278,7 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
             put(
                 "required",
                 buildJsonArray {
-                    parameters.required.forEach { add(JsonPrimitive(it)) }
+                    parameters.properties.keys.forEach { add(JsonPrimitive(it)) }
                 },
             )
             put("additionalProperties", JsonPrimitive(false))
@@ -283,3 +301,5 @@ private fun GroqChatResponse.toAiResponse(): AiResponse {
         ),
     )
 }
+
+private const val GPT_OSS_MODEL_PREFIX = "openai/gpt-oss-"

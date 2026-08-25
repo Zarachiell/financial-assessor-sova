@@ -78,7 +78,12 @@ class FinancialToolsIntegrationTest {
             assertFalse(duplicate.json().getValue("created").jsonPrimitive.boolean)
             assertTrue(income.successful)
 
-            val balance = fixture.dispatch("get_current_balance", "{}", fixture.userA, "SM-BALANCE").json()
+            val balance = fixture.dispatch(
+                "get_current_balance",
+                """{"account":null}""",
+                fixture.userA,
+                "SM-BALANCE",
+            ).json()
             val expenses = fixture.dispatch(
                 "get_expenses",
                 """{"from":"2026-08-01","to":"2026-08-31"}""",
