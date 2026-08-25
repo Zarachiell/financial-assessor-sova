@@ -194,6 +194,8 @@ class FinancialToolsIntegrationTest {
                 projection.getValue("expectedExpenses").jsonPrimitive.content.toBigDecimal(),
             )
             assertEquals(2, projection.getValue("occurrenceCount").jsonPrimitive.content.toInt())
+            assertEquals(1, projection.getValue("incomeOccurrenceCount").jsonPrimitive.content.toInt())
+            assertEquals(1, projection.getValue("expenseOccurrenceCount").jsonPrimitive.content.toInt())
 
             val transactions = fixture.service.listTransactions(fixture.userA).successValue()
             assertEquals(2, transactions.size)

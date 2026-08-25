@@ -112,6 +112,8 @@ class CashFlowTest {
         assertEquals(BigDecimal("30.00"), projection.expectedExpenses)
         assertEquals(BigDecimal("320.00"), projection.projectedBalance)
         assertEquals(4, projection.occurrenceCount)
+        assertEquals(3, projection.incomeOccurrenceCount)
+        assertEquals(1, projection.expenseOccurrenceCount)
     }
 
     private fun entry(

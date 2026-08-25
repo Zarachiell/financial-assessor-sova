@@ -355,6 +355,8 @@ class GetCashFlowProjectionTool(
             put("fromDate", JsonPrimitive(projection.fromDate.toString()))
             put("targetDate", JsonPrimitive(projection.targetDate.toString()))
             put("occurrenceCount", JsonPrimitive(projection.occurrenceCount))
+            put("incomeOccurrenceCount", JsonPrimitive(projection.incomeOccurrenceCount))
+            put("expenseOccurrenceCount", JsonPrimitive(projection.expenseOccurrenceCount))
             account?.let { put("account", JsonPrimitive(it.name.value)) }
         }
     }

@@ -57,6 +57,7 @@ class AiConversationOrchestratorTest {
         assertTrue(systemPrompt.contains("fonte da verdade financeira"))
         assertTrue(systemPrompt.contains("única forma autorizada"))
         assertTrue(systemPrompt.contains("hoje = 2026-08-25"))
+        assertTrue(systemPrompt.contains("occurrenceCount é o total combinado"))
         assertTrue(systemPrompt.length <= 7_000, "System prompt exceeded the free-tier token budget guard")
         assertEquals(
             listOf(AiMessageRole.SYSTEM, AiMessageRole.USER, AiMessageRole.ASSISTANT, AiMessageRole.USER),
@@ -171,6 +172,24 @@ class AiConversationOrchestratorTest {
         assertEquals(
             "Planejamento registrado: despesa prevista de R$ 2000,00, mensal. 🐾 " +
                 "Não envie novamente; a resposta detalhada ficou indisponível.",
+            response,
+        )
+        assertEquals(1, tool.executionCount)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests.last().tools.isEmpty())
+    }
+
+    @Test
+    fun `returns a deterministic projection when the final provider response fails`() = runBlocking {
+        val tool = SuccessfulProjectionTool()
+        val provider = ToolThenRateLimitedProvider("get_cash_flow_projection")
+        val orchestrator = orchestrator(provider, listOf(tool)) { emptyList() }
+
+        val response = orchestrator.respond(context("Quanto teremos dia 30 deste mês?"))
+
+        assertEquals(
+            "Projeção até 30/08/2026: saldo atual R$ 6970,00 + receitas previstas R$ 13250,00 " +
+                "- despesas previstas R$ 850,00 = saldo projetado R$ 19370,00.",
             response,
         )
         assertEquals(1, tool.executionCount)
@@ -335,6 +354,30 @@ private class SuccessfulCashFlowTool : LocalTool {
         put("type", JsonPrimitive("EXPENSE"))
         put("amount", JsonPrimitive("2000.00"))
         put("recurrence", JsonPrimitive("MONTHLY"))
+    }
+}
+
+private class SuccessfulProjectionTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "get_cash_flow_projection",
+        description = "Calculates a test cash flow projection.",
+        parameters = AiToolParameters(
+            properties = mapOf("targetDate" to AiToolParameter(AiJsonType.STRING, "Target date.")),
+        ),
+    )
+    var executionCount: Int = 0
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject = buildJsonObject {
+        executionCount += 1
+        put("ok", JsonPrimitive(true))
+        put("currentBalance", JsonPrimitive("6970.00"))
+        put("expectedIncome", JsonPrimitive("13250.00"))
+        put("expectedExpenses", JsonPrimitive("850.00"))
+        put("projectedBalance", JsonPrimitive("19370.00"))
+        put("targetDate", JsonPrimitive("2026-08-30"))
+        put("occurrenceCount", JsonPrimitive(2))
+        put("incomeOccurrenceCount", JsonPrimitive(1))
+        put("expenseOccurrenceCount", JsonPrimitive(1))
     }
 }
 

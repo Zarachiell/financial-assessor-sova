@@ -339,9 +339,10 @@ WhatsApp textual suporta criação e consulta de fluxo.
 
 ## Verification
 
-- `./gradlew test buildFatJar`: 65 testes, sem falhas ou skips;
+- `./gradlew test buildFatJar`: 66 testes, sem falhas ou skips;
 - integração PostgreSQL valida idempotência, filtros, desativação, isolamento e constraints da V5;
 - integração WhatsApp usa provider fake e executa as duas tools localmente, sem chamadas reais ao Groq ou à Twilio;
+- projeções expõem contagens separadas de receitas/despesas e possuem resposta local determinística se a resposta final do provider falhar;
 - Docker Compose atualizou um volume existente de V4 para V5 e manteve `caddy`, `sova-api` e `postgres` saudáveis;
 - `/health` respondeu `200` por meio do Caddy após o upgrade.
 

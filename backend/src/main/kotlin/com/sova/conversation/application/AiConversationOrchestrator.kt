@@ -188,6 +188,9 @@ class AiConversationOrchestrator(
             ?: executions.singleOrNull()
                 ?.takeIf { it.name == CREATE_CASH_FLOW_ENTRY_TOOL }
                 ?.let(::cashFlowFallback)
+            ?: executions.singleOrNull()
+                ?.takeIf { it.name == GET_CASH_FLOW_PROJECTION_TOOL }
+                ?.let(::projectionFallback)
             ?: GENERIC_LOCAL_FALLBACK
     }
 
@@ -224,6 +227,18 @@ class AiConversationOrchestrator(
             "Não envie novamente; a resposta detalhada ficou indisponível."
     }.getOrDefault(GENERIC_LOCAL_FALLBACK)
 
+    private fun projectionFallback(execution: CompletedToolExecution): String = runCatching {
+        val content = JSON.parseToJsonElement(execution.result.content).jsonObject
+        require(content.getValue("ok").jsonPrimitive.boolean)
+        val currentBalance = content.getValue("currentBalance").moneyContent()
+        val expectedIncome = content.getValue("expectedIncome").moneyContent()
+        val expectedExpenses = content.getValue("expectedExpenses").moneyContent()
+        val projectedBalance = content.getValue("projectedBalance").moneyContent()
+        val targetDate = LocalDate.parse(content.getValue("targetDate").jsonPrimitive.content).format(DISPLAY_DATE)
+        "Projeção até $targetDate: saldo atual R$ $currentBalance + receitas previstas R$ $expectedIncome " +
+            "- despesas previstas R$ $expectedExpenses = saldo projetado R$ $projectedBalance."
+    }.getOrDefault(GENERIC_LOCAL_FALLBACK)
+
     private fun systemPrompt(): String {
         val today = LocalDate.now(clock.withZone(zoneId))
         val currentMonth = YearMonth.from(today)
@@ -250,7 +265,9 @@ class AiConversationOrchestrator(
             omita campos opcionais sem valor. Evento futuro ou recorrente usa create_cash_flow_entry, nunca
             create_transaction: recurrence ONCE/MONTHLY, startDate YYYY-MM-DD, dayOfMonth 1..31 obrigatório para MONTHLY
             e endDate opcional. Projeções usam get_cash_flow_projection com targetDate YYYY-MM-DD; nunca calcule saldo
-            projetado por conta própria. Categorias de despesa: ${DefaultFinancialCatalog.expenseCategories.joinToString()}.
+            projetado por conta própria. Em projeções, occurrenceCount é o total combinado de receitas e despesas;
+            use incomeOccurrenceCount e expenseOccurrenceCount para quantidades por tipo e nunca descreva occurrenceCount
+            como quantidade de salários ou de despesas. Categorias de despesa: ${DefaultFinancialCatalog.expenseCategories.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
             restaurante = Restaurante; reembolso = Reembolso. Nunca envie IDs, SQL ou URLs.
 
@@ -277,6 +294,7 @@ class AiConversationOrchestrator(
         const val MAX_TOOL_CALLS_PER_ROUND = 8
         const val CREATE_TRANSACTION_TOOL = "create_transaction"
         const val CREATE_CASH_FLOW_ENTRY_TOOL = "create_cash_flow_entry"
+        const val GET_CASH_FLOW_PROJECTION_TOOL = "get_cash_flow_projection"
         val PERSISTED_WRITE_TOOLS = setOf(CREATE_TRANSACTION_TOOL, CREATE_CASH_FLOW_ENTRY_TOOL)
         const val GENERIC_LOCAL_FALLBACK =
             "A operação financeira foi concluída localmente, mas a resposta detalhada ficou indisponível. " +
@@ -295,6 +313,9 @@ private data class CompletedToolExecution(
 )
 
 private fun BigDecimal.asBrazilianMoney(): String = setScale(2).toPlainString().replace('.', ',')
+
+private fun kotlinx.serialization.json.JsonElement.moneyContent(): String =
+    jsonPrimitive.content.toBigDecimal().asBrazilianMoney()
 
 private fun loadPrompt(fileName: String): String = requireNotNull(
     AiConversationOrchestrator::class.java.getResourceAsStream("/prompts/$fileName"),

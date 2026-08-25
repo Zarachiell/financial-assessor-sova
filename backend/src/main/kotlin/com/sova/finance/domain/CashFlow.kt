@@ -22,6 +22,8 @@ data class CashFlowProjection(
     val fromDate: LocalDate,
     val targetDate: LocalDate,
     val occurrenceCount: Int,
+    val incomeOccurrenceCount: Int,
+    val expenseOccurrenceCount: Int,
 )
 
 class CashFlowOccurrenceCalculator {
@@ -93,6 +95,8 @@ class CashFlowProjectionCalculator(
             fromDate = fromDate,
             targetDate = targetDate,
             occurrenceCount = occurrences.size,
+            incomeOccurrenceCount = occurrences.count { it.type == FinancialEntryType.INCOME },
+            expenseOccurrenceCount = occurrences.count { it.type == FinancialEntryType.EXPENSE },
         )
     }
 }

@@ -181,7 +181,13 @@ class WhatsappAiFinancialIntegrationTest {
             assertTrue(toolResults.any { it.contains("\"total\":0.00") && it.contains("Restaurante") })
             assertTrue(toolResults.any { it.contains("\"recurrence\":\"MONTHLY\"") && it.contains("\"dayOfMonth\":10") })
             assertTrue(toolResults.any { it.contains("\"recurrence\":\"MONTHLY\"") && it.contains("\"dayOfMonth\":5") })
-            assertTrue(toolResults.any { it.contains("\"projectedBalance\":6468.00") })
+            assertTrue(
+                toolResults.any {
+                    it.contains("\"projectedBalance\":6468.00") &&
+                        it.contains("\"incomeOccurrenceCount\":1") &&
+                        it.contains("\"expenseOccurrenceCount\":1")
+                },
+            )
 
             val exposedNames = provider.requests.flatMap(AiRequest::tools)
                 .flatMap { definition -> definition.parameters.properties.keys }

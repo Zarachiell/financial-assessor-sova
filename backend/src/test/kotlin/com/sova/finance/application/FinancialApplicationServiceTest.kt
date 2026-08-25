@@ -343,6 +343,8 @@ class FinancialApplicationServiceTest {
         assertEquals(BigDecimal("250.00"), general.expectedExpenses)
         assertEquals(BigDecimal("1150.00"), general.projectedBalance)
         assertEquals(4, general.occurrenceCount)
+        assertEquals(2, general.incomeOccurrenceCount)
+        assertEquals(2, general.expenseOccurrenceCount)
 
         val accountProjection = service.getCashFlowProjection(
             context,
@@ -352,6 +354,8 @@ class FinancialApplicationServiceTest {
         assertEquals(BigDecimal("250.00"), accountProjection.expectedExpenses)
         assertEquals(BigDecimal("1050.00"), accountProjection.projectedBalance)
         assertEquals(3, accountProjection.occurrenceCount)
+        assertEquals(1, accountProjection.incomeOccurrenceCount)
+        assertEquals(2, accountProjection.expenseOccurrenceCount)
 
         val activeForAccount = service.listCashFlowEntries(
             context,
