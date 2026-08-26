@@ -112,7 +112,7 @@ class AiConversationOrchestrator(
                 if (!isGroundedAnalyticResponse(finalText, completedBatch, context)) {
                     return UNGROUNDED_ANALYTIC_FALLBACK
                 }
-                return finalText.take(MAX_OUTBOUND_MESSAGE_LENGTH)
+                return applySovaVoice(finalText, completedBatch, context).take(MAX_OUTBOUND_MESSAGE_LENGTH)
             }
             if (availableTools.isEmpty() && completedBatch.isNotEmpty()) {
                 return localFallback(completedBatch, context, AiConversationException("AI called a disabled tool"))
@@ -195,7 +195,7 @@ class AiConversationOrchestrator(
             .addKeyValue("userId", context.userId)
             .addKeyValue("householdId", context.householdId)
             .log("AI final response replaced by local fallback")
-        return executions.singleOrNull()
+        val fallback = executions.singleOrNull()
             ?.takeIf { it.name == CREATE_TRANSACTION_TOOL }
             ?.let(::transactionFallback)
             ?: executions.singleOrNull()
@@ -205,6 +205,25 @@ class AiConversationOrchestrator(
                 ?.takeIf { it.name == GET_CASH_FLOW_PROJECTION_TOOL }
                 ?.let(::projectionFallback)
             ?: GENERIC_LOCAL_FALLBACK
+        return applySovaVoice(fallback, executions, context).take(MAX_OUTBOUND_MESSAGE_LENGTH)
+    }
+
+    private fun applySovaVoice(
+        response: String,
+        executions: List<CompletedToolExecution>,
+        context: WhatsappConversationContext,
+    ): String {
+        if (executions.none { it.result.successful }) return response
+        val familyRole = familyRolesByUserId[context.userId]
+            ?: throw AiConversationException("Authenticated user has no configured family role")
+        val hasVocative = Regex("(?iu)\\b${Regex.escape(familyRole.vocative)}\\b").containsMatchIn(response)
+        val hasBeagleVoice = BEAGLE_VOICE_MARKER.containsMatchIn(response)
+        val personalized = if (hasVocative) {
+            response
+        } else {
+            "${familyRole.vocative}, ${response.lowercaseSentenceStart()}"
+        }
+        return if (hasBeagleVoice) personalized else "$personalized Meu faro conferiu cada centavo. 🐾"
     }
 
     private fun isGroundedAnalyticResponse(
@@ -327,7 +346,8 @@ class AiConversationOrchestrator(
             Datas em $DEFAULT_TIME_ZONE: hoje = $today; ontem = ${today.minusDays(1)};
             este mês=${currentMonth.atDay(1)}..${currentMonth.atEndOfMonth()};
             mês passado=${previousMonth.atDay(1)}..${previousMonth.atEndOfMonth()}.
-            Após tools, responda curto e natural usando exatamente o resultado. Saldo é o saldo registrado.
+            Após tools, use exatamente o resultado e responda curto na voz do Sova: trate por ${familyRole.vocative}
+            e inclua uma breve marca de faro/beagle. Saldo é o saldo registrado.
         """.trimIndent()
     }
 
@@ -368,6 +388,7 @@ class AiConversationOrchestrator(
             "-?(?:[0-9]{1,3}(?:[. ][0-9]{3})+(?:,[0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)"
         val MONEY_CLAIM = Regex("(?i)(?:R\\$\\s*($LOCALIZED_NUMBER)|($LOCALIZED_NUMBER)\\s*reais\\b)")
         val PERCENTAGE_CLAIM = Regex("($LOCALIZED_NUMBER)\\s*%")
+        val BEAGLE_VOICE_MARKER = Regex("(?iu)faro|farej|cheiro|beagle|petisco|passeio|\\bcav(?:ar|ei|ou)\\b|🐾|🐶|👃")
         val DISPLAY_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
         val JSON = Json { ignoreUnknownKeys = true }
         val LOGGER = LoggerFactory.getLogger("com.sova.ai.interaction")
@@ -382,6 +403,9 @@ private data class CompletedToolExecution(
 )
 
 private fun BigDecimal.asBrazilianMoney(): String = setScale(2).toPlainString().replace('.', ',')
+
+private fun String.lowercaseSentenceStart(): String =
+    if (startsWith("R$")) this else replaceFirstChar { character -> character.lowercase() }
 
 private fun kotlinx.serialization.json.JsonElement.moneyContent(): String =
     jsonPrimitive.content.toBigDecimal().asBrazilianMoney()

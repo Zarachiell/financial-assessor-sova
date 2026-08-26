@@ -60,6 +60,7 @@ class AiConversationOrchestratorTest {
         assertTrue(systemPrompt.contains("única forma autorizada"))
         assertTrue(systemPrompt.contains("hoje = 2026-08-25"))
         assertTrue(systemPrompt.contains("occurrenceCount é o total combinado"))
+        assertTrue(systemPrompt.contains("responda curto na voz do Sova"))
         assertTrue(
             systemPrompt.length <= 7_000,
             "System prompt exceeded the free-tier token budget guard: ${systemPrompt.length} chars",
@@ -105,7 +106,10 @@ class AiConversationOrchestratorTest {
 
         val result = orchestrator.respond(context("Qual nosso saldo e despesas?"))
 
-        assertEquals("O saldo e as despesas foram consultados localmente.", result)
+        assertEquals(
+            "Pai, o saldo e as despesas foram consultados localmente. Meu faro conferiu cada centavo. 🐾",
+            result,
+        )
         assertEquals(1, balance.executions.size)
         assertEquals(1, expenses.executions.size)
         assertEquals(householdId, balance.executions.single().financialContext.householdId)
@@ -137,7 +141,11 @@ class AiConversationOrchestratorTest {
 
         val response = orchestrator.respond(context("Onde podemos economizar este mês?"))
 
-        assertEquals("Restaurantes e lazer são as oportunidades fundamentadas nos dados locais.", response)
+        assertEquals(
+            "Pai, restaurantes e lazer são as oportunidades fundamentadas nos dados locais. " +
+                "Meu faro conferiu cada centavo. 🐾",
+            response,
+        )
         assertEquals(4, listOf(comparison, deviations, recurring, largest).sumOf { it.executions.size })
         val finalRequest = provider.requests.last()
         assertTrue(finalRequest.tools.isEmpty())
@@ -165,7 +173,8 @@ class AiConversationOrchestratorTest {
         val ungrounded = orchestrator(ungroundedProvider, listOf(GroundedAnalyticTool())) { emptyList() }
 
         assertEquals(
-            "A renda foi de R$ 13 250,00 e as despesas de R$ 100,00, uma alta de 25%.",
+            "Pai, a renda foi de R$ 13 250,00 e as despesas de R$ 100,00, uma alta de 25%. " +
+                "Meu faro conferiu cada centavo. 🐾",
             grounded.respond(context("Analise.")),
         )
         val rejected = ungrounded.respond(context("Analise."))
@@ -175,6 +184,45 @@ class AiConversationOrchestratorTest {
             rejected,
         )
         assertFalse(rejected.contains("999"))
+    }
+
+    @Test
+    fun `warms a cold financial answer with the authenticated family role`() = runBlocking {
+        val expenses = RecordingTool("get_expenses")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-expenses", "get_expenses", "{}")),
+                answer("Hoje gastamos R$ 113,99 em alimentação."),
+            ),
+        )
+        val orchestrator = orchestrator(
+            provider = provider,
+            tools = listOf(expenses),
+            familyRolesByUserId = mapOf(userId to FamilyRole.MOTHER),
+        ) { emptyList() }
+
+        val response = orchestrator.respond(context("Quanto gastamos com comida hoje?"))
+
+        assertEquals(
+            "Mãe, hoje gastamos R$ 113,99 em alimentação. Meu faro conferiu cada centavo. 🐾",
+            response,
+        )
+    }
+
+    @Test
+    fun `does not duplicate family or beagle voice already present in a financial answer`() = runBlocking {
+        val balance = RecordingTool("get_current_balance")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-balance", "get_current_balance", "{}")),
+                answer("Pai, meu faro encontrou o saldo registrado."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(balance)) { emptyList() }
+
+        val response = orchestrator.respond(context("Qual nosso saldo?"))
+
+        assertEquals("Pai, meu faro encontrou o saldo registrado.", response)
     }
 
     @Test
@@ -235,7 +283,7 @@ class AiConversationOrchestratorTest {
         val response = orchestrator.respond(context("Gastei 32 reais no almoço hoje"))
 
         assertEquals(
-            "Registrado com sucesso: despesa de R$ 32,00 em Alimentação, em 25/08/2026. 🐾 " +
+            "Pai, registrado com sucesso: despesa de R$ 32,00 em Alimentação, em 25/08/2026. 🐾 " +
                 "Não envie novamente; a resposta detalhada ficou indisponível.",
             response,
         )
@@ -253,7 +301,7 @@ class AiConversationOrchestratorTest {
         val response = orchestrator.respond(context("Todo dia 10 pago R$ 2.000 de aluguel"))
 
         assertEquals(
-            "Planejamento registrado: despesa prevista de R$ 2000,00, mensal. 🐾 " +
+            "Pai, planejamento registrado: despesa prevista de R$ 2000,00, mensal. 🐾 " +
                 "Não envie novamente; a resposta detalhada ficou indisponível.",
             response,
         )
@@ -271,8 +319,9 @@ class AiConversationOrchestratorTest {
         val response = orchestrator.respond(context("Quanto teremos dia 30 deste mês?"))
 
         assertEquals(
-            "Projeção até 30/08/2026: saldo atual R$ 6970,00 + receitas previstas R$ 13250,00 " +
-                "- despesas previstas R$ 850,00 = saldo projetado R$ 19370,00.",
+            "Pai, projeção até 30/08/2026: saldo atual R$ 6970,00 + receitas previstas R$ 13250,00 " +
+                "- despesas previstas R$ 850,00 = saldo projetado R$ 19370,00. " +
+                "Meu faro conferiu cada centavo. 🐾",
             response,
         )
         assertEquals(1, tool.executionCount)

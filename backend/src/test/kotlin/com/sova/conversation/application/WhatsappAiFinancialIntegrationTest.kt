@@ -150,14 +150,17 @@ class WhatsappAiFinancialIntegrationTest {
             assertEquals(16, provider.requests.size)
             assertEquals(
                 listOf(
-                    "Despesa de R$ 32,00 registrada em Alimentação.",
-                    "Receita de R$ 500,00 registrada em Reembolso.",
-                    "Gastamos R$ 32,00 neste mês.",
-                    "Nosso saldo registrado é R$ 468,00.",
-                    "Não há despesas de restaurante registradas neste mês.",
-                    "Aluguel mensal de R$ 2.000,00 registrado para todo dia 10.",
-                    "Receita mensal de R$ 8.000,00 registrada para todo dia 5.",
-                    "Teremos uma projeção de R$ 6.468,00 em 25 de setembro.",
+                    "Pai, despesa de R$ 32,00 registrada em Alimentação. Meu faro conferiu cada centavo. 🐾",
+                    "Mãe, receita de R$ 500,00 registrada em Reembolso. Meu faro conferiu cada centavo. 🐾",
+                    "Pai, gastamos R$ 32,00 neste mês. Meu faro conferiu cada centavo. 🐾",
+                    "Mãe, nosso saldo registrado é R$ 468,00. Meu faro conferiu cada centavo. 🐾",
+                    "Pai, não há despesas de restaurante registradas neste mês. Meu faro conferiu cada centavo. 🐾",
+                    "Pai, aluguel mensal de R$ 2.000,00 registrado para todo dia 10. " +
+                        "Meu faro conferiu cada centavo. 🐾",
+                    "Mãe, receita mensal de R$ 8.000,00 registrada para todo dia 5. " +
+                        "Meu faro conferiu cada centavo. 🐾",
+                    "Pai, teremos uma projeção de R$ 6.468,00 em 25 de setembro. " +
+                        "Meu faro conferiu cada centavo. 🐾",
                 ),
                 sender.messages.map { it.second },
             )
