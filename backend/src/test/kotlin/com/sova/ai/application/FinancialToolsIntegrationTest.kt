@@ -32,6 +32,41 @@ import kotlin.test.assertTrue
 
 class FinancialToolsIntegrationTest {
     @Test
+    fun `multiple recurring entries from one MessageSid keep independent idempotency keys`() = runBlocking {
+        withFixture { fixture ->
+            val entries = listOf(
+                Triple("Assinatura Wellhub", "99.90", 12),
+                Triple("Refinanciamento Itaú", "699.58", 15),
+                Triple("Internet 1", "99.90", 15),
+                Triple("Internet 2", "99.90", 15),
+                Triple("Energia", "305", 7),
+                Triple("Água", "130", 15),
+                Triple("Comida", "900", 1),
+                Triple("Parcelas de empréstimos", "2755.99", 30),
+                Triple("Cartão de crédito Nubank", "1500", 10),
+            )
+
+            entries.forEachIndexed { index, (description, amount, dayOfMonth) ->
+                val messageSid = if (index < 4) "SM-FIXED-BATCH-1" else "SM-FIXED-BATCH-2"
+                val itemIndex = if (index < 4) index + 1 else index - 3
+                val arguments =
+                    """{"type":"EXPENSE","amount":$amount,"description":"$description","recurrence":"MONTHLY","startDate":"2026-08-27","dayOfMonth":$dayOfMonth,"itemIndex":$itemIndex}"""
+                assertTrue(fixture.dispatch("create_cash_flow_entry", arguments, fixture.userA, messageSid).successful)
+                assertTrue(fixture.dispatch("create_cash_flow_entry", arguments, fixture.userA, messageSid).successful)
+            }
+
+            val persisted = fixture.service.listCashFlowEntries(fixture.userA).successValue()
+            assertEquals(entries.map { it.first }.toSet(), persisted.map { it.description.value }.toSet())
+            assertEquals(9, persisted.size)
+            assertEquals(
+                (1..4).map { "SM-FIXED-BATCH-1:$it" }.toSet() +
+                    (1..5).map { "SM-FIXED-BATCH-2:$it" }.toSet(),
+                persisted.mapNotNull { it.sourceReferenceId?.value }.toSet(),
+            )
+        }
+    }
+
+    @Test
     fun `audio tool context preserves source and MessageSid on transaction`() = runBlocking {
         withFixture { fixture ->
             fixture.dispatch(

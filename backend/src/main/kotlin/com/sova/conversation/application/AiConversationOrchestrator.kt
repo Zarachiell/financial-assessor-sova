@@ -104,6 +104,8 @@ class AiConversationOrchestrator(
         var availableTools = registry.definitions
         var completedBatch: List<CompletedToolExecution> = emptyList()
         var finalizationRetryUsed = false
+        var writeCompletionRetryUsed = false
+        val expectedWriteCount = expectedWriteCount(context.text)
         val completedReadCalls = mutableSetOf<Pair<String, String>>()
         while (true) {
             val response = try {
@@ -117,6 +119,23 @@ class AiConversationOrchestrator(
             if (response.toolCalls.isEmpty()) {
                 val finalText = response.content?.trim().orEmpty()
                 if (finalText.isBlank()) throw AiConversationException("AI returned an empty response")
+                val completedWriteCount = completedBatch.count { execution ->
+                    execution.name in PERSISTED_WRITE_TOOLS && execution.result.successful
+                }
+                if (expectedWriteCount > completedWriteCount &&
+                    (completedWriteCount > 0 || WRITE_SUCCESS_CLAIM.containsMatchIn(finalText))
+                ) {
+                    if (!writeCompletionRetryUsed) {
+                        writeCompletionRetryUsed = true
+                        availableTools = registry.definitions
+                        messages += AiMessage(
+                            AiMessageRole.USER,
+                            INCOMPLETE_WRITE_RETRY_PROMPT.format(expectedWriteCount, completedWriteCount),
+                        )
+                        continue
+                    }
+                    return INCOMPLETE_WRITE_FALLBACK.format(expectedWriteCount, completedWriteCount)
+                }
                 if (!isGroundedAnalyticResponse(finalText, completedBatch, context)) {
                     return UNGROUNDED_ANALYTIC_FALLBACK
                 }
@@ -372,7 +391,8 @@ class AiConversationOrchestrator(
 
             Responda em português brasileiro. Cálculos e dados financeiros vêm somente das tools. Para receita/despesa
             clara, chame create_transaction; se houver vários lançamentos claros, faça uma chamada por item no mesmo
-            round com itemIndex sequencial 1..N. Se valor, tipo ou intenção forem ambíguos ("acho", "uns 200"),
+            round com itemIndex sequencial 1..N. Para várias contas futuras, faça uma chamada create_cash_flow_entry
+            por item no mesmo round, também com itemIndex sequencial 1..N. Se valor, tipo ou intenção forem ambíguos ("acho", "uns 200"),
             confirme antes. Histórico ajuda a entender confirmações, nunca a repetir escrita.
 
             create_transaction: type INCOME/EXPENSE, amount positivo, occurredOn YYYY-MM-DD e nomes de conta/categoria;
@@ -407,6 +427,18 @@ class AiConversationOrchestrator(
             throw AiConversationException("AI returned an invalid tool call batch")
         }
     }
+
+    private fun expectedWriteCount(text: String): Int = text.lineSequence()
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .count { line ->
+            line.any(Char::isDigit) &&
+                (line.contains("todo dia", ignoreCase = true) ||
+                    line.contains("vencimento", ignoreCase = true) ||
+                    line.contains("R$", ignoreCase = true) ||
+                    MONEY_CLAIM.containsMatchIn(line))
+        }
+        .coerceIn(0, MAX_TOOL_CALLS_PER_ROUND)
 
     private companion object {
         const val DEFAULT_TIME_ZONE = "America/Fortaleza"
@@ -448,12 +480,22 @@ class AiConversationOrchestrator(
         const val FINALIZATION_RETRY_PROMPT =
             "A consulta local j\u00e1 foi executada. Responda agora somente em texto, usando os resultados das tools acima. " +
                 "N\u00e3o chame nenhuma ferramenta novamente."
+        const val INCOMPLETE_WRITE_RETRY_PROMPT =
+            "A solicitação contém %d itens financeiros, mas apenas %d escritas foram confirmadas por tools. " +
+                "Execute agora uma tool de escrita por item ainda necessário, usando itemIndex 1..N para todos. " +
+                "Itens repetidos são idempotentes. Não afirme sucesso até todos os resultados retornarem ok=true."
+        const val INCOMPLETE_WRITE_FALLBACK =
+            "Não consegui concluir o cadastro completo com segurança: %d itens foram solicitados e apenas %d " +
+                "operações foram confirmadas. Nenhum item adicional será declarado como salvo."
         const val UNGROUNDED_ANALYTIC_FALLBACK =
             "Não consegui validar todos os valores da análise com segurança. Reformule a pergunta para eu consultar " +
                 "os dados novamente."
         const val LOCALIZED_NUMBER =
             "-?(?:[0-9]{1,3}(?:[. ][0-9]{3})+(?:,[0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)"
         val MONEY_CLAIM = Regex("(?i)(?:R\\$\\s*($LOCALIZED_NUMBER)|($LOCALIZED_NUMBER)\\s*reais\\b)")
+        val WRITE_SUCCESS_CLAIM = Regex(
+            "(?iu)\\b(?:cadastrei|cadastradas?|registrei|registradas?|anotei|anotadas?|salvei|salvas?)\\b",
+        )
         val PERCENTAGE_CLAIM = Regex("($LOCALIZED_NUMBER)\\s*%")
         val BEAGLE_VOICE_MARKER = Regex("(?iu)faro|farej|cheiro|beagle|petisco|passeio|\\bcav(?:ar|ei|ou)\\b|🐾|🐶|👃")
         val DISPLAY_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")

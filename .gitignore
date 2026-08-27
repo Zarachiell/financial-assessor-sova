@@ -39,6 +39,7 @@ replay_pid*
 .env
 .env.*
 !.env.example
+.ci-secrets/
 
 # Operating system files
 .DS_Store

@@ -390,6 +390,9 @@ class CreateCashFlowEntryTool(
                 "dayOfMonth" to integerParameter("Dia 1..31 obrigatório para MONTHLY; omita para ONCE."),
                 "category" to stringParameter("Nome opcional da categoria financeira."),
                 "account" to stringParameter("Nome opcional da conta financeira."),
+                "itemIndex" to integerParameter(
+                    "Posição 1..8 obrigatória quando a mensagem contiver mais de uma previsão; omita para apenas uma.",
+                ),
             ),
             required = setOf("type", "amount", "description", "recurrence", "startDate"),
         ),
@@ -400,6 +403,14 @@ class CreateCashFlowEntryTool(
         val recurrence = CashFlowRecurrence.valueOf(arguments.requiredString("recurrence"))
         val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
         val category = arguments.optionalString("category")?.let { resolveCategory(context, it, type) }
+        val itemIndex = arguments.optionalInt("itemIndex")?.also {
+            require(it in 1..MAX_CASH_FLOW_ITEMS) { "itemIndex must be between 1 and $MAX_CASH_FLOW_ITEMS" }
+        }
+        val sourceReference = if (itemIndex == null) {
+            context.inboundMessageSid
+        } else {
+            "${context.inboundMessageSid}:$itemIndex"
+        }
         val creation = service.createCashFlowEntry(
             context.financialContext,
             CreateCashFlowEntryCommand(
@@ -413,7 +424,7 @@ class CreateCashFlowEntryTool(
                 endDate = arguments.optionalDate("endDate"),
                 dayOfMonth = arguments.optionalInt("dayOfMonth"),
                 source = context.source,
-                sourceReferenceId = SourceReferenceId.of(context.inboundMessageSid),
+                sourceReferenceId = SourceReferenceId.of(sourceReference),
             ),
         ).requiredValue()
 
@@ -432,6 +443,10 @@ class CreateCashFlowEntryTool(
             category?.let { put("category", JsonPrimitive(it.name.value)) }
             account?.let { put("account", JsonPrimitive(it.name.value)) }
         }
+    }
+
+    private companion object {
+        const val MAX_CASH_FLOW_ITEMS = 8
     }
 }
 

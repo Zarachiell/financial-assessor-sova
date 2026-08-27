@@ -26,8 +26,29 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     needs: backend
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
     steps:
       - uses: actions/checkout@v4
+      - name: Create non-functional ADC fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-secrets
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out .ci-secrets/private-key.pem 2>/dev/null
+          jq --null-input --rawfile private_key .ci-secrets/private-key.pem '{
+            type: "service_account",
+            project_id: "sova-ci-smoke",
+            private_key_id: "ci-only-non-functional-key",
+            private_key: $private_key,
+            client_email: "sova-ci-smoke@sova-ci-smoke.iam.gserviceaccount.com",
+            client_id: "100000000000000000000",
+            auth_uri: "https://accounts.google.com/o/oauth2/auth",
+            token_uri: "https://oauth2.googleapis.com/token",
+            auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+            client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/sova-ci-smoke%40sova-ci-smoke.iam.gserviceaccount.com",
+            universe_domain: "googleapis.com"
+          }' > .ci-secrets/google-service-account.json
       - name: Start the complete stack
         run: docker compose up --detach --build --wait
       - name: Verify API through Caddy

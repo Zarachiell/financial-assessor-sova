@@ -1,0 +1,4 @@
+services:
+  sova-api:
+    volumes:
+      - ./.ci-secrets/google-service-account.json:/run/secrets/google_service_account:ro

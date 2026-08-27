@@ -165,6 +165,44 @@ class AiConversationOrchestratorTest {
     }
 
     @Test
+    fun `does not confirm a recurring batch until every requested item executes`() = runBlocking {
+        val create = RecordingTool("create_cash_flow_entry")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-first", "create_cash_flow_entry", "{}")),
+                answer("Cadastrei todas as contas."),
+                toolCalls(
+                    AiToolCall("call-second", "create_cash_flow_entry", "{}"),
+                    AiToolCall("call-third", "create_cash_flow_entry", "{}"),
+                    AiToolCall("call-fourth", "create_cash_flow_entry", "{}"),
+                ),
+                answer("Cadastrei as quatro contas mensais."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(create)) { emptyList() }
+        val message = """
+            Contas fixas:
+            Wellhub: 99.90 todo dia 12
+            Itaú: 699.58 todo dia 15
+            Internet 1: 99.90 todo dia 15
+            Internet 2: 99.90 todo dia 15
+        """.trimIndent()
+
+        val result = orchestrator.respond(context(message))
+
+        assertEquals(4, create.executions.size)
+        assertEquals(4, provider.requests.size)
+        assertTrue(provider.requests[2].tools.isNotEmpty())
+        assertTrue(
+            provider.requests[2].messages.any { requestMessage ->
+                requestMessage.content?.contains("4 itens financeiros") == true &&
+                    requestMessage.content.contains("apenas 1 escritas")
+            },
+        )
+        assertTrue(result.contains("quatro contas", ignoreCase = true))
+    }
+
+    @Test
     fun `retries a textual final when Gemini repeats a completed read tool`() = runBlocking {
         val transactions = RecordingTool("get_transactions")
         val provider = QueueAiProvider(
