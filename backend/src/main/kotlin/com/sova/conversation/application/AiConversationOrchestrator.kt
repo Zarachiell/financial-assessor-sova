@@ -97,6 +97,7 @@ class AiConversationOrchestrator(
         var completedToolRounds = 0
         var availableTools = registry.definitions
         var completedBatch: List<CompletedToolExecution> = emptyList()
+        var finalizationRetryUsed = false
         while (true) {
             val response = try {
                 complete(messages, availableTools, context, completedToolRounds)
@@ -115,6 +116,11 @@ class AiConversationOrchestrator(
                 return applySovaVoice(finalText, completedBatch, context).take(MAX_OUTBOUND_MESSAGE_LENGTH)
             }
             if (availableTools.isEmpty() && completedBatch.isNotEmpty()) {
+                if (!finalizationRetryUsed && completedBatch.none { it.name in PERSISTED_WRITE_TOOLS }) {
+                    finalizationRetryUsed = true
+                    messages += AiMessage(AiMessageRole.USER, FINALIZATION_RETRY_PROMPT)
+                    continue
+                }
                 return localFallback(completedBatch, context, AiConversationException("AI called a disabled tool"))
             }
             if (completedToolRounds >= maxToolRounds) {
@@ -212,7 +218,11 @@ class AiConversationOrchestrator(
             ?: executions.singleOrNull()
                 ?.takeIf { it.name == GET_CASH_FLOW_PROJECTION_TOOL }
                 ?.let(::projectionFallback)
-            ?: GENERIC_LOCAL_FALLBACK
+            ?: if (executions.none { it.name in PERSISTED_WRITE_TOOLS }) {
+                READ_LOCAL_FALLBACK
+            } else {
+                GENERIC_LOCAL_FALLBACK
+            }
         return applySovaVoice(fallback, executions, context).take(MAX_OUTBOUND_MESSAGE_LENGTH)
     }
 
@@ -389,6 +399,12 @@ class AiConversationOrchestrator(
         const val GENERIC_LOCAL_FALLBACK =
             "A operação financeira foi concluída localmente, mas a resposta detalhada ficou indisponível. " +
                 "Se foi um registro, não envie novamente; consulte os dados em instantes."
+        const val READ_LOCAL_FALLBACK =
+            "A consulta foi conclu\u00edda localmente, mas a resposta detalhada ficou indispon\u00edvel. " +
+                "Tente consultar novamente em instantes."
+        const val FINALIZATION_RETRY_PROMPT =
+            "A consulta local j\u00e1 foi executada. Responda agora somente em texto, usando os resultados das tools acima. " +
+                "N\u00e3o chame nenhuma ferramenta novamente."
         const val UNGROUNDED_ANALYTIC_FALLBACK =
             "Não consegui validar todos os valores da análise com segurança. Reformule a pergunta para eu consultar " +
                 "os dados novamente."

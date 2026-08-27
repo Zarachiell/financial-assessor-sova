@@ -121,6 +121,34 @@ class AiConversationOrchestratorTest {
     }
 
     @Test
+    fun `retries a textual final when Gemini repeats a completed read tool`() = runBlocking {
+        val transactions = RecordingTool("get_transactions")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-transactions", "get_transactions", "{}")),
+                toolCalls(AiToolCall("call-transactions-again", "get_transactions", "{}")),
+                answer("Encontrei as despesas previstas para setembro."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(transactions)) { emptyList() }
+
+        val result = orchestrator.respond(context("Quais despesas temos em setembro?"))
+
+        assertEquals(
+            "Pai, encontrei as despesas previstas para setembro. Meu faro conferiu cada centavo. \uD83D\uDC3E",
+            result,
+        )
+        assertEquals(1, transactions.executions.size)
+        assertEquals(3, provider.requests.size)
+        assertTrue(provider.requests[1].tools.isEmpty())
+        assertTrue(
+            provider.requests[2].messages.any { message ->
+                message.content?.contains("N\u00e3o chame nenhuma ferramenta novamente.") == true
+            },
+        )
+    }
+
+    @Test
     fun `open savings question combines analytic tools and returns only minimal local results`() = runBlocking {
         val comparison = RecordingTool("compare_periods")
         val deviations = RecordingTool("get_budget_deviations")
