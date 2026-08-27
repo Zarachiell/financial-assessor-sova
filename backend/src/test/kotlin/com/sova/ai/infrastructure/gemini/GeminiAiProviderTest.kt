@@ -1,5 +1,6 @@
 package com.sova.ai.infrastructure.gemini
 
+import com.google.genai.kotlin.Client
 import com.google.genai.kotlin.GenAiApiException
 import com.google.genai.kotlin.types.Candidate
 import com.google.genai.kotlin.types.Content
@@ -33,6 +34,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GeminiAiProviderTest {
+    @Test
+    fun `constructs official SDK client on the application runtime classpath`() {
+        Client(apiKey = "not-used").use { client ->
+            assertFalse(client.enterprise)
+        }
+    }
+
     @Test
     fun `maps system prompt tools and Gemini function call without automatic execution`() = runBlocking {
         val signature = byteArrayOf(1, 2, 3, 4)

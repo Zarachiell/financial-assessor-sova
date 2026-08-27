@@ -194,7 +194,18 @@ jobs:
           compose_files=(-f docker-compose.yml -f docker-compose.production.yml)
 
           cleanup() {
+            status="$?"
+            trap - EXIT
+            if [ "$status" -ne 0 ] && [ -f "${release_path}/docker-compose.yml" ]; then
+              echo "Deployment failed; collecting sova-api diagnostics" >&2
+              (
+                cd "$release_path"
+                docker compose "${compose_files[@]}" ps || true
+                docker compose "${compose_files[@]}" logs --no-color --tail=120 sova-api || true
+              )
+            fi
             rm -f "$remote_archive" "$remote_env" "$next_env"
+            exit "$status"
           }
           trap cleanup EXIT
 
