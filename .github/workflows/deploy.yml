@@ -91,9 +91,14 @@ jobs:
           SOVA_USER_A_WHATSAPP: ${{ secrets.SOVA_USER_A_WHATSAPP }}
           SOVA_USER_B_NAME: ${{ secrets.SOVA_USER_B_NAME }}
           SOVA_USER_B_WHATSAPP: ${{ secrets.SOVA_USER_B_WHATSAPP }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'gemini' }}
           SOVA_AI_PROVIDER: ${{ secrets.SOVA_AI_PROVIDER }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT || 'sova-506801' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.GOOGLE_CLOUD_LOCATION || 'global' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}
+          MAX_TOOL_ITERATIONS: ${{ vars.MAX_TOOL_ITERATIONS || '5' }}
           SOVA_MAX_PROJECTION_MONTHS: ${{ vars.SOVA_MAX_PROJECTION_MONTHS || '24' }}
         run: |
           set -euo pipefail
@@ -127,9 +132,14 @@ jobs:
             SOVA_USER_A_WHATSAPP
             SOVA_USER_B_NAME
             SOVA_USER_B_WHATSAPP
+            AI_PROVIDER
             SOVA_AI_PROVIDER
             GROQ_API_KEY
             GROQ_MODEL
+            GOOGLE_CLOUD_PROJECT
+            GOOGLE_CLOUD_LOCATION
+            GEMINI_MODEL
+            MAX_TOOL_ITERATIONS
             SOVA_MAX_PROJECTION_MONTHS
           )
 
@@ -179,7 +189,9 @@ jobs:
           remote_env="$4"
           release_path="${deploy_root}/releases/${release_id}"
           shared_env="${deploy_root}/shared/.env"
+          google_credentials="${deploy_root}/secrets/google-service-account.json"
           next_env="${shared_env}.next-${release_id}"
+          compose_files=(-f docker-compose.yml -f docker-compose.production.yml)
 
           cleanup() {
             rm -f "$remote_archive" "$remote_env" "$next_env"
@@ -192,6 +204,21 @@ jobs:
           }
 
           mkdir -p "${deploy_root}/releases" "${deploy_root}/shared"
+          test -f "$google_credentials" || {
+            echo "Missing Google credentials file: $google_credentials" >&2
+            exit 1
+          }
+          credential_mode_text="$(stat -c '%a' "$google_credentials")"
+          case "$credential_mode_text" in
+            640|440) ;;
+            *)
+              echo "Google credentials must use mode 0640 or 0440" >&2
+              exit 1
+              ;;
+          esac
+          GOOGLE_SERVICE_ACCOUNT_GID="$(stat -c '%g' "$google_credentials")"
+          [[ "$GOOGLE_SERVICE_ACCOUNT_GID" =~ ^[0-9]+$ ]]
+          export GOOGLE_SERVICE_ACCOUNT_GID
           install -m 600 "$remote_env" "$next_env"
           mv -f "$next_env" "$shared_env"
           mkdir "$release_path"
@@ -199,9 +226,23 @@ jobs:
           ln -s "$shared_env" "${release_path}/.env"
 
           cd "$release_path"
-          docker compose config --quiet
-          docker compose up --detach --build --remove-orphans --wait
-          docker compose ps
+          docker compose "${compose_files[@]}" config --quiet
+          docker compose "${compose_files[@]}" build sova-api
+          docker compose "${compose_files[@]}" run \
+            --rm \
+            --no-deps \
+            --entrypoint sh \
+            -e EXPECTED_GOOGLE_SERVICE_ACCOUNT_GID="$GOOGLE_SERVICE_ACCOUNT_GID" \
+            sova-api -ec '
+            test "$(id -u)" = "10001"
+            test "$(id -g)" = "10001"
+            id -G | tr " " "\n" | grep -Fx "$EXPECTED_GOOGLE_SERVICE_ACCOUNT_GID" >/dev/null
+            test -r /run/secrets/google_service_account
+            printf "Sova runtime identity: uid=%s gid=%s supplementary_gids=%s; Google credentials: OK\n" \
+              "$(id -u)" "$(id -g)" "$(id -G)"
+          '
+          docker compose "${compose_files[@]}" up --detach --build --remove-orphans --wait
+          docker compose "${compose_files[@]}" ps
 
           next_link="${deploy_root}/.current-${release_id}"
           ln -s "$release_path" "$next_link"

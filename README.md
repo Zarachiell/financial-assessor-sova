@@ -24,7 +24,7 @@ O Sova deve permitir:
 - Regras financeiras e cálculos permanecem determinísticos no backend.
 - Toda operação sugerida por IA passa por validação de domínio.
 - Dados enviados a providers externos devem ser minimizados.
-- A arquitetura deve permitir substituir Groq por um provider self-hosted.
+- A arquitetura permite alternar Gemini, Groq e um futuro provider self-hosted sem alterar o domínio.
 
 ## Usuários
 
@@ -51,7 +51,7 @@ Os dois usuários compartilham as mesmas informações financeiras, mas a autori
 | Migrations | Flyway |
 | SQL | jOOQ |
 | WhatsApp | Twilio |
-| IA inicial | Groq |
+| IA | Gemini via Google Cloud; Groq como rollback temporário |
 | IA self-hosted futura | Ollama |
 | Proxy/TLS | Caddy |
 | Infra | Docker Compose |
@@ -80,7 +80,7 @@ Sova
   │
   │ HTTPS outbound
   ▼
-Groq
+AiProvider externo
   │
   │ tool_call
   ▼
@@ -93,7 +93,7 @@ Domain
 PostgreSQL
 ```
 
-O Groq não acessa diretamente o Sova, PostgreSQL ou endpoints internos.
+O provider de IA não acessa diretamente o Sova, PostgreSQL ou endpoints internos.
 
 ## Estrutura esperada do repositório
 
@@ -132,13 +132,14 @@ Antes de alterar comportamento ou arquitetura, consultar:
 2. WhatsApp textual
 3. Núcleo financeiro
 4. Groq + local tool calling
-5. Fluxo de caixa
-6. Financial insights
-7. Áudio
-8. Imagem
-9. Importação de extratos
-10. Dashboard
-11. IA self-hosted
+5. Migração para Gemini via Google Cloud
+6. Fluxo de caixa
+7. Financial insights
+8. Áudio
+9. Imagem
+10. Importação de extratos
+11. Dashboard
+12. IA self-hosted
 
 Não avançar automaticamente entre fases.
 
@@ -182,6 +183,12 @@ SOVA_USER_A_NAME
 SOVA_USER_A_WHATSAPP
 SOVA_USER_B_NAME
 SOVA_USER_B_WHATSAPP
+AI_PROVIDER
+GOOGLE_CLOUD_PROJECT
+GOOGLE_CLOUD_LOCATION
+GOOGLE_APPLICATION_CREDENTIALS
+GEMINI_MODEL
+MAX_TOOL_ITERATIONS
 GROQ_API_KEY
 SOVA_AI_PROVIDER
 GROQ_MODEL
@@ -230,7 +237,7 @@ Copie `.env.example` para `.env` quando precisar alterar os padrões. Não versi
 - use uma senha forte em `DATABASE_PASSWORD`;
 - configure `SOVA_ADDRESS` com o domínio público;
 - substitua todas as configurações locais da Twilio e dos dois usuários;
-- configure `SOVA_AI_PROVIDER=groq`, `GROQ_API_KEY` e um `GROQ_MODEL` compatível com tool calling;
+- configure `AI_PROVIDER=gemini`, projeto/localização/modelo Google e ADC; mantenha Groq configurado durante a janela de rollback;
 - exponha `SOVA_HTTP_PORT=80` e `SOVA_HTTPS_PORT=443` para o Caddy emitir e renovar certificados HTTPS automaticamente.
 
 ### WhatsApp / Twilio
@@ -253,7 +260,7 @@ Um sender da Twilio possui uma configuração principal de webhook inbound. Se o
 
 ### Backend sem Docker
 
-Com JDK 21 e um PostgreSQL acessível, exporte as variáveis de banco, Twilio, provisioning e Groq listadas em `.env.example`. Depois execute:
+Com JDK 21 e um PostgreSQL acessível, exporte as variáveis de banco, Twilio, provisioning e do provider de IA listadas em `.env.example`. Depois execute:
 
 ```bash
 cd backend
@@ -281,6 +288,6 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 Fase 5 — financial insights implementada localmente. O Sova calcula snapshots, comparações, tendências,
 maiores despesas, recorrências heurísticas, desvios, taxa de poupança, projeção mensal e planos simples de
-economia no backend/PostgreSQL. O Groq recebe apenas métricas agregadas para explicá-las. Classificações de
+economia no backend/PostgreSQL. O provider recebe apenas métricas agregadas para explicá-las. Classificações de
 despesas, limites, thresholds e isolamento por household possuem cobertura automatizada sem chamadas reais ao
-Groq ou à Twilio.
+Gemini/Groq ou à Twilio.

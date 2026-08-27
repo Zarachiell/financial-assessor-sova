@@ -55,15 +55,15 @@ class AiConversationOrchestratorTest {
         val systemPrompt = messages.first().content.orEmpty()
         assertTrue(systemPrompt.contains("puro suco de um beagle"))
         assertTrue(systemPrompt.contains("Quem está falando nesta conversa: Pai."))
-        assertTrue(systemPrompt.contains("Esse não escapa do meu faro"))
+        assertTrue(systemPrompt.contains("energia de um cachorro que encontrou um cheiro interessante"))
         assertTrue(systemPrompt.contains("fonte da verdade financeira"))
         assertTrue(systemPrompt.contains("única forma autorizada"))
         assertTrue(systemPrompt.contains("hoje = 2026-08-25"))
         assertTrue(systemPrompt.contains("occurrenceCount é o total combinado"))
         assertTrue(systemPrompt.contains("responda curto na voz do Sova"))
         assertTrue(
-            systemPrompt.length <= 7_000,
-            "System prompt exceeded the free-tier token budget guard: ${systemPrompt.length} chars",
+            systemPrompt.length <= 12_000,
+            "System prompt exceeded the context size guard: ${systemPrompt.length} chars",
         )
         assertEquals(
             listOf(AiMessageRole.SYSTEM, AiMessageRole.USER, AiMessageRole.ASSISTANT, AiMessageRole.USER),

@@ -11,7 +11,7 @@ push na main
   -> smoke test com Docker Compose
   -> Deploy production
   -> SCP do commit aprovado
-  -> docker compose up --build --wait
+  -> docker compose -f docker-compose.yml -f docker-compose.production.yml up --build --wait
 ```
 
 O deploy só ocorre quando o workflow `CI` termina com sucesso para um `push` na branch `main`. Também pode ser iniciado manualmente pela interface do GitHub, desde que a branch selecionada seja `main`.
@@ -36,6 +36,18 @@ sudo usermod -aG docker deploy
 sudo install -d -o deploy -g deploy -m 700 /opt/sova
 sudo install -d -o deploy -g deploy -m 700 /opt/sova/shared
 ```
+
+Prepare também o diretório da credencial Google com um grupo dedicado. O processo Java não será executado como root; a imagem fixa sua identidade em `10001:10001` e o Compose adiciona apenas o GID numérico real deste arquivo como grupo suplementar:
+
+```bash
+sudo groupadd --system sova-google-credentials
+sudo usermod -aG sova-google-credentials deploy
+sudo install -d -o root -g sova-google-credentials -m 750 /opt/sova/secrets
+sudo chown root:sova-google-credentials /opt/sova/secrets/google-service-account.json
+sudo chmod 640 /opt/sova/secrets/google-service-account.json
+```
+
+Se o grupo já existir, ignore o erro de `groupadd`. Abra uma nova sessão do usuário `deploy` depois do `usermod`. Não altere o arquivo para `644`: o workflow aceita somente `0640` ou `0440` e descobre o GID pelo `stat`, sem assumir correspondência entre nomes de grupos do host e do container.
 
 O grupo `docker` possui privilégios elevados sobre a máquina. A chave deste usuário deve ser exclusiva do GitHub Actions e não deve ser reutilizada para acesso pessoal.
 
@@ -86,12 +98,19 @@ SOVA_USER_A_WHATSAPP=whatsapp:+55<ddd><numero>
 SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
 
+AI_PROVIDER=gemini
 SOVA_AI_PROVIDER=groq
+GOOGLE_CLOUD_PROJECT=sova-506801
+GOOGLE_CLOUD_LOCATION=global
+GEMINI_MODEL=gemini-3.5-flash-lite
+MAX_TOOL_ITERATIONS=5
+
+# Mantidos temporariamente para rollback
 GROQ_API_KEY=<api-key-groq>
 GROQ_MODEL=openai/gpt-oss-120b
 ```
 
-`GROQ_API_KEY` deve conter somente a chave, sem prefixo `Bearer`. O modelo é configurável, mas precisa suportar local tool calling.
+`AI_PROVIDER` é a seleção principal; `SOVA_AI_PROVIDER` permanece somente como fallback de compatibilidade. O Gemini usa ADC pelo arquivo montado em `/run/secrets/google_service_account`, sem API key. `GROQ_API_KEY` deve conter somente a chave, sem prefixo `Bearer`, e permanece configurada para rollback imediato.
 
 O workflow cria ou atualiza `/opt/sova/shared/.env` com permissão `600`. Não é necessário criar esse arquivo manualmente.
 
@@ -99,6 +118,7 @@ Para conferir a permissão depois do primeiro deploy:
 
 ```bash
 stat -c '%U %G %a %n' /opt/sova/shared/.env
+stat -c '%U %G %a %n' /opt/sova/secrets/google-service-account.json
 ```
 
 O endereço HTTP por IP permite a validação inicial do canal real, mas não atende ao requisito de HTTPS definido em `SPEC.md`. Antes de trafegar informações financeiras reais, configure HTTPS.
@@ -137,6 +157,19 @@ VPS_PORT         22
 VPS_DEPLOY_PATH  /opt/sova
 ```
 
+Crie ou revise também as repository variables abaixo. Os defaults do workflow são mostrados à direita:
+
+```text
+AI_PROVIDER              gemini
+GOOGLE_CLOUD_PROJECT     sova-506801
+GOOGLE_CLOUD_LOCATION    global
+GEMINI_MODEL             gemini-3.5-flash-lite
+MAX_TOOL_ITERATIONS      5
+SOVA_MAX_PROJECTION_MONTHS 24
+```
+
+O JSON da Service Account não é enviado pelo GitHub Actions. Ele permanece exclusivamente em `/opt/sova/secrets/google-service-account.json` na VPS.
+
 Os Secrets são enviados somente ao arquivo de produção e não são incluídos no pacote versionado da aplicação nem impressos pelo workflow.
 
 ## 5. Primeiro deploy
@@ -172,11 +205,46 @@ docker compose ps
 docker compose logs --tail=200
 ```
 
+Para usar o override de produção explicitamente nos diagnósticos:
+
+```bash
+export GOOGLE_SERVICE_ACCOUNT_GID="$(stat -c '%g' /opt/sova/secrets/google-service-account.json)"
+docker compose -f docker-compose.yml -f docker-compose.production.yml ps
+docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tail=200
+```
+
+Valide a identidade real e a leitura da credencial sem imprimir seu conteúdo:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml exec \
+  -e EXPECTED_GOOGLE_SERVICE_ACCOUNT_GID="$GOOGLE_SERVICE_ACCOUNT_GID" \
+  sova-api sh -ec '
+  test "$(id -u)" = "10001"
+  test "$(id -g)" = "10001"
+  id -G | tr " " "\n" | grep -Fx "$EXPECTED_GOOGLE_SERVICE_ACCOUNT_GID" >/dev/null
+  test -r /run/secrets/google_service_account
+  printf "Sova runtime identity: uid=%s gid=%s supplementary_gids=%s; Google credentials: OK\n" \
+    "$(id -u)" "$(id -g)" "$(id -G)"
+'
+```
+
+Depois envie `Oi Sova` por WhatsApp e execute ao menos uma escrita e uma consulta financeira. Confirme nos logs apenas `provider`, `model`, tokens, latência, tools e status; nunca o prompt completo ou a credencial.
+
 Se um deploy falhar, o link `current` continua indicando a última release que chegou ao estado saudável. Para reativá-la, desde que suas migrations sejam compatíveis:
 
 ```bash
 cd /opt/sova/current
 docker compose up --detach --build --remove-orphans --wait
 ```
+
+Para rollback imediato ao Groq, altere `AI_PROVIDER` em `/opt/sova/shared/.env` para `groq` e suba somente o Compose base. Isso remove a dependência do secret Google sem mudar containers, volumes ou migrations:
+
+```bash
+cd /opt/sova/current
+docker compose -f docker-compose.yml up --detach --build --remove-orphans --wait
+docker compose -f docker-compose.yml ps
+```
+
+Para retornar ao Gemini, restaure `AI_PROVIDER=gemini`, exporte novamente `GOOGLE_SERVICE_ACCOUNT_GID` pelo `stat` e use os dois arquivos Compose.
 
 Migrations Flyway não devem ser revertidas ou editadas. Um rollback de aplicação só é seguro quando a versão anterior permanece compatível com o schema já aplicado.

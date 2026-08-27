@@ -53,10 +53,51 @@ class AppConfigTest {
     @Test
     fun `loads Groq provider configuration`() {
         val config = AppConfig.fromEnvironment(requiredEnvironment)
+        val settings = config.ai.settings as GroqAiConfig
 
-        assertEquals("groq", config.ai.provider)
-        assertEquals("test-api-key", config.ai.apiKey)
-        assertEquals("test-tool-model", config.ai.model)
+        assertEquals(AiProviderType.GROQ, config.ai.provider)
+        assertEquals("test-api-key", settings.apiKey)
+        assertEquals("test-tool-model", settings.model)
+        assertEquals(5, config.ai.maxToolIterations)
+    }
+
+    @Test
+    fun `loads Gemini enterprise configuration without requiring Groq credentials`() {
+        val environment = requiredEnvironment
+            .minus("GROQ_API_KEY")
+            .minus("GROQ_MODEL") + mapOf(
+                "AI_PROVIDER" to "gemini",
+                "GOOGLE_CLOUD_PROJECT" to "sova-test",
+                "GOOGLE_APPLICATION_CREDENTIALS" to "/run/secrets/google_service_account",
+            )
+
+        val config = AppConfig.fromEnvironment(environment)
+        val settings = config.ai.settings as GeminiAiConfig
+
+        assertEquals(AiProviderType.GEMINI, config.ai.provider)
+        assertEquals("sova-test", settings.project)
+        assertEquals("global", settings.location)
+        assertEquals("gemini-3.5-flash-lite", settings.model)
+        assertEquals("/run/secrets/google_service_account", settings.credentialsPath)
+    }
+
+    @Test
+    fun `uses explicit Gemini settings and configurable tool iteration limit`() {
+        val config = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "AI_PROVIDER" to "gemini",
+                "GOOGLE_CLOUD_PROJECT" to "another-project",
+                "GOOGLE_CLOUD_LOCATION" to "us-central1",
+                "GOOGLE_APPLICATION_CREDENTIALS" to "/credentials.json",
+                "GEMINI_MODEL" to "gemini-custom",
+                "MAX_TOOL_ITERATIONS" to "7",
+            ),
+        )
+        val settings = config.ai.settings as GeminiAiConfig
+
+        assertEquals("us-central1", settings.location)
+        assertEquals("gemini-custom", settings.model)
+        assertEquals(7, config.ai.maxToolIterations)
     }
 
     @Test
@@ -80,6 +121,13 @@ class AppConfigTest {
     fun `rejects unsupported AI provider`() {
         assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_AI_PROVIDER" to "remote-mcp"))
+        }
+    }
+
+    @Test
+    fun `rejects an excessive tool iteration limit`() {
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("MAX_TOOL_ITERATIONS" to "21"))
         }
     }
 

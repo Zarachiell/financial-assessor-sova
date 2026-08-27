@@ -4,7 +4,7 @@
 
 Ordem atual:
 
-**bootstrap → WhatsApp textual → financial core → Groq/tool calling → cash flow → financial insights → áudio → imagem → importação → dashboard → self-hosted AI**
+**bootstrap → WhatsApp textual → financial core → local tool calling → Gemini migration → cash flow → financial insights → áudio → imagem → importação → dashboard → self-hosted AI**
 
 ---
 
@@ -112,6 +112,24 @@ Contexto runtime:
 
 Spec:
 `docs/phases/03-groq-tool-calling.md`
+
+---
+
+## Fase 3.5 — Migração Groq → Gemini
+Objetivo: usar Gemini via Google Cloud sem alterar o local tool calling ou as regras financeiras.
+
+Entregáveis:
+- `GeminiAiProvider`;
+- SDK oficial Kotlin;
+- autenticação ADC por Service Account;
+- seleção `gemini|groq` por ambiente;
+- Groq temporário para rollback;
+- tool calling e resultados normalizados;
+- métricas de uso e finish reason;
+- secret montado somente no `sova-api` pelo Compose de produção.
+
+Spec:
+`docs/phases/phase-3.5-migracao-groq-gemini.md`
 
 ---
 

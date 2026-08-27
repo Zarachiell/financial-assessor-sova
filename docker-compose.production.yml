@@ -1,0 +1,17 @@
+services:
+  sova-api:
+    environment:
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-sova-506801}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_service_account
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+    group_add:
+      - "${GOOGLE_SERVICE_ACCOUNT_GID:?GOOGLE_SERVICE_ACCOUNT_GID must match the host credential file group}"
+    secrets:
+      - source: google_service_account
+        target: google_service_account
+
+secrets:
+  google_service_account:
+    file: /opt/sova/secrets/google-service-account.json

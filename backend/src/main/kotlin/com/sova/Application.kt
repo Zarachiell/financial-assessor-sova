@@ -3,6 +3,8 @@ package com.sova
 import com.sova.ai.application.LocalToolDispatcher
 import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.financialLocalTools
+import com.sova.ai.application.AiProvider
+import com.sova.ai.infrastructure.gemini.GeminiAiProvider
 import com.sova.ai.infrastructure.groq.GroqAiProvider
 import com.sova.conversation.application.AiConversationOrchestrator
 import com.sova.conversation.application.FamilyRole
@@ -16,6 +18,10 @@ import com.sova.finance.infrastructure.persistence.PostgresFinancialRepository
 import com.sova.finance.insights.application.FinancialInsightsApplicationService
 import com.sova.finance.insights.infrastructure.persistence.PostgresFinancialInsightsRepository
 import com.sova.shared.config.AppConfig
+import com.sova.shared.config.AiConfig
+import com.sova.shared.config.AiProviderType
+import com.sova.shared.config.GeminiAiConfig
+import com.sova.shared.config.GroqAiConfig
 import com.sova.shared.infrastructure.database.PostgresDatabase
 import com.sova.whatsapp.application.HandleWhatsappTextMessage
 import com.sova.whatsapp.application.HouseholdProvisioning
@@ -28,6 +34,8 @@ import io.ktor.server.application.Application
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Files
+import java.nio.file.Path
 
 fun main() {
     val config = AppConfig.fromEnvironment()
@@ -66,7 +74,7 @@ fun main() {
     }
 
     val senderAddress = WhatsappAddress(config.twilio.whatsappSender)
-    GroqAiProvider(config.ai.apiKey, config.ai.model).use { provider ->
+    createAiProvider(config.ai).use { provider ->
         val toolRegistry = LocalToolRegistry(financialLocalTools(financialService, financialInsightsService))
         val conversation = AiConversationOrchestrator(
             provider = provider,
@@ -77,6 +85,7 @@ fun main() {
                 authorizedUsers[0].userId to FamilyRole.FATHER,
                 authorizedUsers[1].userId to FamilyRole.MOTHER,
             ),
+            maxToolRounds = config.ai.maxToolIterations,
         )
         val whatsapp = WhatsappHttpDependencies(
             expectedAccountSid = config.twilio.accountSid,
@@ -97,6 +106,21 @@ fun main() {
         ) {
             module(database, whatsapp)
         }.start(wait = true)
+    }
+}
+
+private fun createAiProvider(config: AiConfig): AiProvider = when (config.provider) {
+    AiProviderType.GROQ -> {
+        val settings = config.settings as GroqAiConfig
+        GroqAiProvider(settings.apiKey, settings.model)
+    }
+    AiProviderType.GEMINI -> {
+        val settings = config.settings as GeminiAiConfig
+        val credentialsPath = Path.of(settings.credentialsPath)
+        require(Files.isRegularFile(credentialsPath) && Files.isReadable(credentialsPath)) {
+            "Google application credentials must be a readable regular file"
+        }
+        GeminiAiProvider(settings.project, settings.location, settings.model)
     }
 }
 

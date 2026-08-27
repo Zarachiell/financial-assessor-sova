@@ -1,6 +1,7 @@
 package com.sova.ai.infrastructure.groq
 
 import com.sova.ai.application.AiJsonType
+import com.sova.ai.application.AiFinishReason
 import com.sova.ai.application.AiMessage
 import com.sova.ai.application.AiMessageRole
 import com.sova.ai.application.AiProvider
@@ -8,8 +9,10 @@ import com.sova.ai.application.AiProviderException
 import com.sova.ai.application.AiProviderFailure
 import com.sova.ai.application.AiRequest
 import com.sova.ai.application.AiResponse
+import com.sova.ai.application.AiResponseMetadata
 import com.sova.ai.application.AiToolCall
 import com.sova.ai.application.AiToolDefinition
+import com.sova.ai.application.AiUsage
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpRequestTimeoutException
@@ -73,7 +76,7 @@ class GroqAiProvider(
                 response.status.value !in 200..299 ->
                     fail(AiProviderFailure.UNAVAILABLE, response.status, responseBody, response.headers)
             }
-            return json.decodeFromString<GroqChatResponse>(responseBody).toAiResponse()
+            return json.decodeFromString<GroqChatResponse>(responseBody).toAiResponse(model)
         } catch (cause: CancellationException) {
             throw cause
         } catch (cause: AiProviderException) {
@@ -291,10 +294,23 @@ private data class GroqFunctionCall(
 )
 
 @Serializable
-private data class GroqChatResponse(val choices: List<GroqChoice>)
+private data class GroqChatResponse(
+    val choices: List<GroqChoice>,
+    val usage: GroqUsage? = null,
+)
 
 @Serializable
-private data class GroqChoice(val message: GroqResponseMessage)
+private data class GroqChoice(
+    val message: GroqResponseMessage,
+    @SerialName("finish_reason") val finishReason: String? = null,
+)
+
+@Serializable
+private data class GroqUsage(
+    @SerialName("prompt_tokens") val promptTokens: Int? = null,
+    @SerialName("completion_tokens") val completionTokens: Int? = null,
+    @SerialName("total_tokens") val totalTokens: Int? = null,
+)
 
 @Serializable
 private data class GroqResponseMessage(
@@ -390,12 +406,13 @@ private fun AiToolDefinition.toGroqDefinition(): GroqToolDefinition = GroqToolDe
     ),
 )
 
-private fun GroqChatResponse.toAiResponse(): AiResponse {
-    val response = choices.firstOrNull()?.message
+private fun GroqChatResponse.toAiResponse(model: String): AiResponse {
+    val choice = choices.firstOrNull()
         ?: throw IllegalArgumentException("Groq response did not contain a choice")
+    val response = choice.message
     require(response.role == AiMessageRole.ASSISTANT.wireName) { "Groq response role must be assistant" }
     return AiResponse(
-        AiMessage(
+        message = AiMessage(
             role = AiMessageRole.ASSISTANT,
             content = response.content,
             toolCalls = response.toolCalls.map { call ->
@@ -403,7 +420,23 @@ private fun GroqChatResponse.toAiResponse(): AiResponse {
                 AiToolCall(call.id, call.function.name, call.function.arguments)
             },
         ),
+        metadata = AiResponseMetadata(
+            provider = "groq",
+            model = model,
+            usage = usage?.let { tokens ->
+                AiUsage(tokens.promptTokens, tokens.completionTokens, tokens.totalTokens)
+            },
+            finishReason = choice.finishReason.toAiFinishReason(),
+        ),
     )
+}
+
+private fun String?.toAiFinishReason(): AiFinishReason? = when (this) {
+    null -> null
+    "stop", "tool_calls" -> AiFinishReason.STOP
+    "length" -> AiFinishReason.MAX_TOKENS
+    "content_filter" -> AiFinishReason.SAFETY
+    else -> AiFinishReason.OTHER
 }
 
 private const val GPT_OSS_MODEL_PREFIX = "openai/gpt-oss-"

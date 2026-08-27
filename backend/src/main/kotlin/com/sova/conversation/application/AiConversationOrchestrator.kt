@@ -152,17 +152,25 @@ class AiConversationOrchestrator(
     ): AiMessage {
         val startedAt = TimeSource.Monotonic.markNow()
         return try {
-            provider.complete(AiRequest(messages.toList(), tools)).message.also { response ->
-                LOGGER.atInfo()
-                    .addKeyValue("status", "success")
-                    .addKeyValue("toolRound", toolRound)
-                    .addKeyValue("toolCallCount", response.toolCalls.size)
-                    .addKeyValue("toolDefinitionCount", tools.size)
-                    .addKeyValue("userId", context.userId)
-                    .addKeyValue("householdId", context.householdId)
-                    .addKeyValue("durationMs", startedAt.elapsedNow().inWholeMilliseconds)
-                    .log("AI interaction processed")
-            }
+            val completion = provider.complete(AiRequest(messages.toList(), tools))
+            val response = completion.message
+            val metadata = completion.metadata
+            LOGGER.atInfo()
+                .addKeyValue("status", "success")
+                .addKeyValue("provider", metadata?.provider)
+                .addKeyValue("model", metadata?.model)
+                .addKeyValue("inputTokens", metadata?.usage?.inputTokens)
+                .addKeyValue("outputTokens", metadata?.usage?.outputTokens)
+                .addKeyValue("totalTokens", metadata?.usage?.totalTokens)
+                .addKeyValue("finishReason", metadata?.finishReason?.name?.lowercase())
+                .addKeyValue("toolRound", toolRound)
+                .addKeyValue("toolCallCount", response.toolCalls.size)
+                .addKeyValue("toolDefinitionCount", tools.size)
+                .addKeyValue("userId", context.userId)
+                .addKeyValue("householdId", context.householdId)
+                .addKeyValue("durationMs", startedAt.elapsedNow().inWholeMilliseconds)
+                .log("AI interaction processed")
+            response
         } catch (cause: CancellationException) {
             throw cause
         } catch (cause: Exception) {

@@ -35,6 +35,8 @@ dependencies {
     implementation("io.ktor:ktor-client-core")
     implementation("io.ktor:ktor-client-cio")
 
+    implementation("com.google.genai:google-genai-kotlin:0.5.0")
+
     implementation("com.twilio.sdk:twilio:12.1.1")
 
     implementation("org.flywaydb:flyway-core:13.0.0")
