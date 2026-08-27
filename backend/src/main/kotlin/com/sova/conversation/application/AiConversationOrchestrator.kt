@@ -12,7 +12,9 @@ import com.sova.ai.application.ToolDispatchResult
 import com.sova.ai.application.ToolExecutionContext
 import com.sova.finance.application.DefaultFinancialCatalog
 import com.sova.finance.domain.FinancialContext
+import com.sova.finance.domain.FinancialSource
 import com.sova.whatsapp.application.WhatsappConversationContext
+import com.sova.whatsapp.application.WhatsappMessageOrigin
 import com.sova.whatsapp.application.WhatsappTextConversation
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -93,6 +95,10 @@ class AiConversationOrchestrator(
         val executionContext = ToolExecutionContext(
             financialContext = FinancialContext(context.householdId, context.userId),
             inboundMessageSid = context.inboundMessageSid,
+            source = when (context.origin) {
+                WhatsappMessageOrigin.TEXT -> FinancialSource.WHATSAPP_TEXT
+                WhatsappMessageOrigin.AUDIO -> FinancialSource.WHATSAPP_AUDIO
+            },
         )
         var completedToolRounds = 0
         var availableTools = registry.definitions

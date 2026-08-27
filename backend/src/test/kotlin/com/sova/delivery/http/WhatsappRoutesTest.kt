@@ -47,6 +47,34 @@ class WhatsappRoutesTest {
     }
 
     @Test
+    fun `audio webhook maps all Twilio media metadata`() = testApplication {
+        val validator = RecordingSignatureValidator(valid = true)
+        val handler = RecordingHandler { WhatsappHandlingResult.Queued(userId, householdId, UUID.randomUUID()) }
+        application { module(DatabaseHealth { true }, dependencies(validator, handler)) }
+
+        val response = client.submitForm(
+            url = "/webhooks/twilio/whatsapp",
+            formParameters = parameters {
+                append("MessageSid", "SM-AUDIO")
+                append("AccountSid", ACCOUNT_SID)
+                append("From", "whatsapp:+15550000001")
+                append("To", "whatsapp:+15550000000")
+                append("NumMedia", "2")
+                append("MediaUrl0", "https://api.twilio.com/media/ME1")
+                append("MediaContentType0", "audio/ogg")
+                append("MediaUrl1", "https://api.twilio.com/media/ME2")
+                append("MediaContentType1", "image/jpeg")
+            },
+        ) { header("X-Twilio-Signature", "valid") }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("", handler.received?.body)
+        assertEquals(2, handler.received?.numMedia)
+        assertEquals("audio/ogg", handler.received?.media?.first()?.contentType)
+        assertEquals("https://api.twilio.com/media/ME2", handler.received?.media?.last()?.mediaUrl)
+    }
+
+    @Test
     fun `invalid signature returns forbidden before parsing or handling`() = testApplication {
         val validator = RecordingSignatureValidator(valid = false)
         val handler = RecordingHandler { WhatsappHandlingResult.Unauthorized }

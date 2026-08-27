@@ -5,7 +5,11 @@ import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.financialLocalTools
 import com.sova.ai.application.AiProvider
 import com.sova.ai.infrastructure.gemini.GeminiAiProvider
-import com.sova.ai.infrastructure.groq.GroqAiProvider
+import com.sova.audio.application.AudioProcessingConfig
+import com.sova.audio.application.AudioProcessingWorker
+import com.sova.audio.application.ProcessAudioMessage
+import com.sova.audio.infrastructure.gemini.GeminiSpeechToTextProvider
+import com.sova.audio.infrastructure.persistence.PostgresAudioProcessingRepository
 import com.sova.conversation.application.AiConversationOrchestrator
 import com.sova.conversation.application.FamilyRole
 import com.sova.conversation.infrastructure.persistence.PostgresConversationHistory
@@ -19,16 +23,14 @@ import com.sova.finance.insights.application.FinancialInsightsApplicationService
 import com.sova.finance.insights.infrastructure.persistence.PostgresFinancialInsightsRepository
 import com.sova.shared.config.AppConfig
 import com.sova.shared.config.AiConfig
-import com.sova.shared.config.AiProviderType
-import com.sova.shared.config.GeminiAiConfig
-import com.sova.shared.config.GroqAiConfig
 import com.sova.shared.infrastructure.database.PostgresDatabase
-import com.sova.whatsapp.application.HandleWhatsappTextMessage
+import com.sova.whatsapp.application.HandleWhatsappMessage
 import com.sova.whatsapp.application.HouseholdProvisioning
 import com.sova.whatsapp.application.ProvisionedWhatsappUser
 import com.sova.whatsapp.domain.WhatsappAddress
 import com.sova.whatsapp.infrastructure.persistence.PostgresWhatsappRepository
 import com.sova.whatsapp.infrastructure.twilio.TwilioWebhookSignatureValidator
+import com.sova.whatsapp.infrastructure.twilio.TwilioWhatsappMediaDownloader
 import com.sova.whatsapp.infrastructure.twilio.TwilioWhatsappMessageSender
 import io.ktor.server.application.Application
 import io.ktor.server.engine.embeddedServer
@@ -36,6 +38,7 @@ import io.ktor.server.netty.Netty
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 
 fun main() {
     val config = AppConfig.fromEnvironment()
@@ -87,41 +90,66 @@ fun main() {
             ),
             maxToolRounds = config.ai.maxToolIterations,
         )
-        val whatsapp = WhatsappHttpDependencies(
-            expectedAccountSid = config.twilio.accountSid,
-            expectedSenderAddress = senderAddress,
-            signatureValidator = TwilioWebhookSignatureValidator(config.twilio.authToken),
-            handler = HandleWhatsappTextMessage(
-                repository = whatsappRepository,
-                senderAddress = senderAddress,
-                sender = TwilioWhatsappMessageSender(senderAddress, config.twilio),
-                conversation = conversation,
-            ),
+        val sender = TwilioWhatsappMessageSender(senderAddress, config.twilio)
+        val audioProcessingConfig = AudioProcessingConfig(
+            maxAudioBytes = config.audio.maxAudioBytes,
+            maxAudioDuration = Duration.ofMinutes(config.audio.maxAudioDurationMinutes.toLong()),
+            maxAttempts = config.audio.maxAttempts,
         )
-
-        embeddedServer(
-            factory = Netty,
-            host = config.http.host,
-            port = config.http.port,
-        ) {
-            module(database, whatsapp)
-        }.start(wait = true)
+        TwilioWhatsappMediaDownloader(config.twilio, config.audio.maxAudioBytes).use { downloader ->
+            GeminiSpeechToTextProvider(
+                project = config.ai.settings.project,
+                location = config.ai.settings.location,
+                model = config.audio.model,
+            ).use { speechToText ->
+                val worker = AudioProcessingWorker(
+                    processor = ProcessAudioMessage(
+                        repository = PostgresAudioProcessingRepository(database),
+                        whatsappRepository = whatsappRepository,
+                        downloader = downloader,
+                        speechToText = speechToText,
+                        conversation = conversation,
+                        senderAddress = senderAddress,
+                        sender = sender,
+                        config = audioProcessingConfig,
+                    ),
+                    pollInterval = audioProcessingConfig.pollInterval,
+                )
+                val whatsapp = WhatsappHttpDependencies(
+                    expectedAccountSid = config.twilio.accountSid,
+                    expectedSenderAddress = senderAddress,
+                    signatureValidator = TwilioWebhookSignatureValidator(config.twilio.authToken),
+                    handler = HandleWhatsappMessage(
+                        repository = whatsappRepository,
+                        senderAddress = senderAddress,
+                        sender = sender,
+                        conversation = conversation,
+                    ),
+                )
+                worker.start()
+                try {
+                    embeddedServer(
+                        factory = Netty,
+                        host = config.http.host,
+                        port = config.http.port,
+                    ) {
+                        module(database, whatsapp)
+                    }.start(wait = true)
+                } finally {
+                    worker.close()
+                }
+            }
+        }
     }
 }
 
-private fun createAiProvider(config: AiConfig): AiProvider = when (config.provider) {
-    AiProviderType.GROQ -> {
-        val settings = config.settings as GroqAiConfig
-        GroqAiProvider(settings.apiKey, settings.model)
+private fun createAiProvider(config: AiConfig): AiProvider {
+    val settings = config.settings
+    val credentialsPath = Path.of(settings.credentialsPath)
+    require(Files.isRegularFile(credentialsPath) && Files.isReadable(credentialsPath)) {
+        "Google application credentials must be a readable regular file"
     }
-    AiProviderType.GEMINI -> {
-        val settings = config.settings as GeminiAiConfig
-        val credentialsPath = Path.of(settings.credentialsPath)
-        require(Files.isRegularFile(credentialsPath) && Files.isReadable(credentialsPath)) {
-            "Google application credentials must be a readable regular file"
-        }
-        GeminiAiProvider(settings.project, settings.location, settings.model)
-    }
+    return GeminiAiProvider(settings.project, settings.location, settings.model)
 }
 
 fun Application.module(

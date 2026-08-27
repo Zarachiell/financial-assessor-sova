@@ -24,7 +24,7 @@ O Sova deve permitir:
 - Regras financeiras e cálculos permanecem determinísticos no backend.
 - Toda operação sugerida por IA passa por validação de domínio.
 - Dados enviados a providers externos devem ser minimizados.
-- A arquitetura permite alternar Gemini, Groq e um futuro provider self-hosted sem alterar o domínio.
+- A arquitetura mantém ports internos que permitem uma troca futura de provider sem alterar o domínio; operacionalmente, o provider atual é apenas Gemini.
 
 ## Usuários
 
@@ -51,7 +51,7 @@ Os dois usuários compartilham as mesmas informações financeiras, mas a autori
 | Migrations | Flyway |
 | SQL | jOOQ |
 | WhatsApp | Twilio |
-| IA | Gemini via Google Cloud; Groq como rollback temporário |
+| IA | Gemini via Google Cloud |
 | IA self-hosted futura | Ollama |
 | Proxy/TLS | Caddy |
 | Infra | Docker Compose |
@@ -188,10 +188,11 @@ GOOGLE_CLOUD_PROJECT
 GOOGLE_CLOUD_LOCATION
 GOOGLE_APPLICATION_CREDENTIALS
 GEMINI_MODEL
+GEMINI_AUDIO_MODEL
 MAX_TOOL_ITERATIONS
-GROQ_API_KEY
-SOVA_AI_PROVIDER
-GROQ_MODEL
+SOVA_MAX_AUDIO_BYTES
+SOVA_MAX_AUDIO_DURATION_MINUTES
+SOVA_AUDIO_MAX_ATTEMPTS
 ```
 
 O repositório deverá possuir apenas `.env.example`.
@@ -237,7 +238,7 @@ Copie `.env.example` para `.env` quando precisar alterar os padrões. Não versi
 - use uma senha forte em `DATABASE_PASSWORD`;
 - configure `SOVA_ADDRESS` com o domínio público;
 - substitua todas as configurações locais da Twilio e dos dois usuários;
-- configure `AI_PROVIDER=gemini`, projeto/localização/modelo Google e ADC; mantenha Groq configurado durante a janela de rollback;
+- configure `AI_PROVIDER=gemini`, projeto/localização/modelos Google e ADC;
 - exponha `SOVA_HTTP_PORT=80` e `SOVA_HTTPS_PORT=443` para o Caddy emitir e renovar certificados HTTPS automaticamente.
 
 ### WhatsApp / Twilio
@@ -290,4 +291,4 @@ Fase 5.5 — gestão de registros e liquidação implementada. Além dos insight
 logicamente transações, registra várias despesas na mesma mensagem, detalha ocorrências futuras pendentes/pagas e
 quita cada ocorrência de forma idempotente. A quitação cria atomicamente a transação real e deixa de contar a
 previsão como pendente. Autoria, isolamento por household, migration V7 e fluxos Gemini/local tool calling possuem
-cobertura automatizada sem chamadas reais ao Gemini/Groq ou à Twilio.
+cobertura automatizada sem chamadas reais ao Gemini ou à Twilio.

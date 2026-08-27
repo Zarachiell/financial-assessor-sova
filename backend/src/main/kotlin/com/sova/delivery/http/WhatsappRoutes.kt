@@ -1,6 +1,7 @@
 package com.sova.delivery.http
 
 import com.sova.whatsapp.application.InboundWhatsappMessage
+import com.sova.whatsapp.application.InboundWhatsappMedia
 import com.sova.whatsapp.application.WhatsappHandlingResult
 import com.sova.whatsapp.application.WhatsappWebhookHandler
 import com.sova.whatsapp.application.WhatsappWebhookSignatureValidator
@@ -71,6 +72,14 @@ fun Route.whatsappRoutes(dependencies: WhatsappHttpDependencies) {
                 householdId = result.householdId.toString(),
             )
 
+            is WhatsappHandlingResult.Queued -> logResult(
+                status = "queued",
+                messageSid = payload.messageSid,
+                userId = result.userId.toString(),
+                householdId = result.householdId.toString(),
+                attachmentId = result.attachmentId.toString(),
+            )
+
             WhatsappHandlingResult.Unauthorized -> logResult(
                 status = "unauthorized_sender",
                 messageSid = payload.messageSid,
@@ -85,9 +94,16 @@ private fun Parameters.toWhatsappPayload(): InboundWhatsappMessage? {
     val accountSid = this["AccountSid"]?.takeIf(String::isNotBlank) ?: return null
     val from = this["From"]?.let(::validAddressOrNull) ?: return null
     val to = this["To"]?.let(::validAddressOrNull) ?: return null
-    val body = this["Body"] ?: return null
     val numMedia = this["NumMedia"]?.toIntOrNull()?.takeIf { it >= 0 } ?: return null
-    return InboundWhatsappMessage(messageSid, accountSid, from, to, body, numMedia)
+    val body = this["Body"] ?: if (numMedia > 0) "" else return null
+    val media = (0 until numMedia).map { index ->
+        InboundWhatsappMedia(
+            index = index,
+            mediaUrl = this["MediaUrl$index"]?.takeIf(String::isNotBlank) ?: return null,
+            contentType = this["MediaContentType$index"]?.takeIf(String::isNotBlank) ?: return null,
+        )
+    }
+    return InboundWhatsappMessage(messageSid, accountSid, from, to, body, media)
 }
 
 private fun validAddressOrNull(value: String): WhatsappAddress? =
@@ -109,11 +125,13 @@ private fun logResult(
     messageSid: String? = null,
     userId: String? = null,
     householdId: String? = null,
+    attachmentId: String? = null,
 ) {
     val event = LOGGER.atInfo().addKeyValue("status", status)
     messageSid?.let { event.addKeyValue("messageSid", it) }
     userId?.let { event.addKeyValue("userId", it) }
     householdId?.let { event.addKeyValue("householdId", it) }
+    attachmentId?.let { event.addKeyValue("attachmentId", it) }
     event.log("WhatsApp webhook processed")
 }
 

@@ -17,9 +17,9 @@ class AppConfigTest {
         "SOVA_USER_A_WHATSAPP" to "whatsapp:+15550000001",
         "SOVA_USER_B_NAME" to "User B",
         "SOVA_USER_B_WHATSAPP" to "whatsapp:+15550000002",
-        "SOVA_AI_PROVIDER" to "groq",
-        "GROQ_API_KEY" to "test-api-key",
-        "GROQ_MODEL" to "test-tool-model",
+        "AI_PROVIDER" to "gemini",
+        "GOOGLE_CLOUD_PROJECT" to "sova-test",
+        "GOOGLE_APPLICATION_CREDENTIALS" to "/run/secrets/google_service_account",
     )
 
     @Test
@@ -51,30 +51,20 @@ class AppConfigTest {
     }
 
     @Test
-    fun `loads Groq provider configuration`() {
+    fun `loads Gemini as the exclusive provider`() {
         val config = AppConfig.fromEnvironment(requiredEnvironment)
-        val settings = config.ai.settings as GroqAiConfig
+        val settings = config.ai.settings
 
-        assertEquals(AiProviderType.GROQ, config.ai.provider)
-        assertEquals("test-api-key", settings.apiKey)
-        assertEquals("test-tool-model", settings.model)
+        assertEquals("sova-test", settings.project)
+        assertEquals("gemini-3.5-flash-lite", settings.model)
         assertEquals(5, config.ai.maxToolIterations)
     }
 
     @Test
     fun `loads Gemini enterprise configuration without requiring Groq credentials`() {
-        val environment = requiredEnvironment
-            .minus("GROQ_API_KEY")
-            .minus("GROQ_MODEL") + mapOf(
-                "AI_PROVIDER" to "gemini",
-                "GOOGLE_CLOUD_PROJECT" to "sova-test",
-                "GOOGLE_APPLICATION_CREDENTIALS" to "/run/secrets/google_service_account",
-            )
+        val config = AppConfig.fromEnvironment(requiredEnvironment)
+        val settings = config.ai.settings
 
-        val config = AppConfig.fromEnvironment(environment)
-        val settings = config.ai.settings as GeminiAiConfig
-
-        assertEquals(AiProviderType.GEMINI, config.ai.provider)
         assertEquals("sova-test", settings.project)
         assertEquals("global", settings.location)
         assertEquals("gemini-3.5-flash-lite", settings.model)
@@ -93,7 +83,7 @@ class AppConfigTest {
                 "MAX_TOOL_ITERATIONS" to "7",
             ),
         )
-        val settings = config.ai.settings as GeminiAiConfig
+        val settings = config.ai.settings
 
         assertEquals("us-central1", settings.location)
         assertEquals("gemini-custom", settings.model)
@@ -118,9 +108,31 @@ class AppConfigTest {
     }
 
     @Test
+    fun `uses centralized Gemini audio limits and model`() {
+        val defaults = AppConfig.fromEnvironment(requiredEnvironment).audio
+        assertEquals("gemini-3.5-flash-lite", defaults.model)
+        assertEquals(16L * 1024 * 1024, defaults.maxAudioBytes)
+        assertEquals(5, defaults.maxAudioDurationMinutes)
+        assertEquals(3, defaults.maxAttempts)
+
+        val configured = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "GEMINI_AUDIO_MODEL" to "gemini-audio-test",
+                "SOVA_MAX_AUDIO_BYTES" to "1024",
+                "SOVA_MAX_AUDIO_DURATION_MINUTES" to "4",
+                "SOVA_AUDIO_MAX_ATTEMPTS" to "2",
+            ),
+        ).audio
+        assertEquals("gemini-audio-test", configured.model)
+        assertEquals(1024, configured.maxAudioBytes)
+        assertEquals(4, configured.maxAudioDurationMinutes)
+        assertEquals(2, configured.maxAttempts)
+    }
+
+    @Test
     fun `rejects unsupported AI provider`() {
         assertFailsWith<IllegalArgumentException> {
-            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_AI_PROVIDER" to "remote-mcp"))
+            AppConfig.fromEnvironment(requiredEnvironment + ("AI_PROVIDER" to "remote-mcp"))
         }
     }
 

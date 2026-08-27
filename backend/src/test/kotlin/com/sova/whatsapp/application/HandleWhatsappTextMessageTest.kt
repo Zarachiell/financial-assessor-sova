@@ -71,6 +71,44 @@ class HandleWhatsappTextMessageTest {
     }
 
     @Test
+    fun `supported audio is persisted and queued without synchronous response`() = runBlocking {
+        val repository = InMemoryWhatsappRepository(userA)
+        val sender = RecordingWhatsappSender()
+        val handler = HandleWhatsappMessage(repository, senderAddress, sender, clock)
+
+        val result = handler.handle(
+            message("SM-AUDIO", userA.address, "").copy(
+                media = listOf(
+                    InboundWhatsappMedia(0, "https://api.twilio.com/media/ME1", "audio/ogg; codecs=opus"),
+                ),
+            ),
+        )
+
+        val queued = assertIs<WhatsappHandlingResult.Queued>(result)
+        assertEquals(queued.attachmentId, repository.queuedAudioAttachmentId)
+        assertEquals(WhatsappMediaType.AUDIO, repository.attachments.single().mediaType)
+        assertEquals("audio/ogg", repository.attachments.single().contentType)
+        assertTrue(sender.sent.isEmpty())
+    }
+
+    @Test
+    fun `unsupported media is persisted and receives controlled response`() = runBlocking {
+        val repository = InMemoryWhatsappRepository(userA)
+        val sender = RecordingWhatsappSender()
+        val handler = HandleWhatsappMessage(repository, senderAddress, sender, clock)
+
+        val result = handler.handle(
+            message("SM-IMAGE", userA.address, "legenda").copy(
+                media = listOf(InboundWhatsappMedia(0, "https://api.twilio.com/media/ME2", "image/jpeg")),
+            ),
+        )
+
+        assertIs<WhatsappHandlingResult.Processed>(result)
+        assertEquals(WhatsappMediaType.IMAGE, repository.attachments.single().mediaType)
+        assertTrue(sender.sent.single().second.contains("texto ou áudio"))
+    }
+
+    @Test
     fun `non-ping text receives a neutral response without NLP`() = runBlocking {
         val repository = InMemoryWhatsappRepository(userA)
         val sender = RecordingWhatsappSender()
@@ -138,7 +176,7 @@ class HandleWhatsappTextMessageTest {
         from = from,
         to = senderAddress,
         body = body,
-        numMedia = 0,
+        media = emptyList(),
     )
 }
 
@@ -157,13 +195,23 @@ private class InMemoryWhatsappRepository(
     private val usersByAddress = users.associateBy { it.address }
     val inbound = linkedMapOf<String, StoredWhatsappMessage>()
     val outbound = mutableListOf<StoredWhatsappMessage>()
+    val attachments = mutableListOf<StoredWhatsappAttachment>()
+    var queuedAudioAttachmentId: UUID? = null
 
     override suspend fun provision(household: HouseholdProvisioning) = Unit
 
     override suspend fun findActiveUser(address: WhatsappAddress): AuthorizedWhatsappUser? = usersByAddress[address]
 
-    override suspend fun saveInboundIfNew(message: StoredWhatsappMessage): Boolean =
-        inbound.putIfAbsent(message.messageSid, message) == null
+    override suspend fun saveInboundIfNew(
+        message: StoredWhatsappMessage,
+        attachments: List<StoredWhatsappAttachment>,
+        audioJobAttachmentId: UUID?,
+    ): Boolean {
+        if (inbound.putIfAbsent(message.messageSid, message) != null) return false
+        this.attachments += attachments
+        queuedAudioAttachmentId = audioJobAttachmentId
+        return true
+    }
 
     override suspend fun saveOutbound(message: StoredWhatsappMessage) {
         outbound += message

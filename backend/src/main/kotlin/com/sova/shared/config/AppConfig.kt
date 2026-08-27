@@ -1,7 +1,6 @@
 package com.sova.shared.config
 
 import com.sova.whatsapp.domain.WhatsappAddress
-import java.util.Locale
 
 data class AppConfig(
     val http: HttpConfig,
@@ -10,6 +9,7 @@ data class AppConfig(
     val household: HouseholdProvisioningConfig,
     val ai: AiConfig,
     val cashFlow: CashFlowConfig,
+    val audio: AudioConfig,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig =
@@ -46,9 +46,23 @@ data class AppConfig(
                     maxProjectionMonths = environment.optionalPositiveInt("SOVA_MAX_PROJECTION_MONTHS")
                         ?: DEFAULT_MAX_PROJECTION_MONTHS,
                 ),
+                audio = AudioConfig(
+                    model = environment["GEMINI_AUDIO_MODEL"]?.takeIf(String::isNotBlank)
+                        ?: environment["GEMINI_MODEL"]?.takeIf(String::isNotBlank)
+                        ?: DEFAULT_GEMINI_MODEL,
+                    maxAudioBytes = environment.optionalPositiveLong("SOVA_MAX_AUDIO_BYTES")
+                        ?: DEFAULT_MAX_AUDIO_BYTES,
+                    maxAudioDurationMinutes = environment.optionalPositiveInt("SOVA_MAX_AUDIO_DURATION_MINUTES")
+                        ?: DEFAULT_MAX_AUDIO_DURATION_MINUTES,
+                    maxAttempts = environment.optionalPositiveInt("SOVA_AUDIO_MAX_ATTEMPTS")
+                        ?: DEFAULT_AUDIO_MAX_ATTEMPTS,
+                ),
             )
 
         private const val DEFAULT_MAX_PROJECTION_MONTHS = 24
+        private const val DEFAULT_MAX_AUDIO_BYTES = 16L * 1024 * 1024
+        private const val DEFAULT_MAX_AUDIO_DURATION_MINUTES = 5
+        private const val DEFAULT_AUDIO_MAX_ATTEMPTS = 3
     }
 }
 
@@ -69,30 +83,15 @@ data class TwilioConfig(
     val whatsappSender: String,
 )
 
-enum class AiProviderType {
-    GROQ,
-    GEMINI,
-}
-
-sealed interface AiProviderSettings {
-    val model: String
-}
-
-data class GroqAiConfig(
-    val apiKey: String,
-    override val model: String,
-) : AiProviderSettings
-
 data class GeminiAiConfig(
     val project: String,
     val location: String,
-    override val model: String,
+    val model: String,
     val credentialsPath: String,
-) : AiProviderSettings
+)
 
 data class AiConfig(
-    val provider: AiProviderType,
-    val settings: AiProviderSettings,
+    val settings: GeminiAiConfig,
     val maxToolIterations: Int,
 ) {
     init {
@@ -117,6 +116,32 @@ data class CashFlowConfig(
 
     private companion object {
         const val MAX_PROJECTION_MONTHS = 120
+    }
+}
+
+data class AudioConfig(
+    val model: String,
+    val maxAudioBytes: Long,
+    val maxAudioDurationMinutes: Int,
+    val maxAttempts: Int,
+) {
+    init {
+        require(model.isNotBlank()) { "Gemini audio model must not be blank" }
+        require(maxAudioBytes in 1..MAX_PROVIDER_UPLOAD_BYTES) {
+            "Maximum audio size must be between 1 byte and $MAX_PROVIDER_UPLOAD_BYTES bytes"
+        }
+        require(maxAudioDurationMinutes in 1..MAX_AUDIO_DURATION_MINUTES) {
+            "Maximum audio duration must be between 1 and $MAX_AUDIO_DURATION_MINUTES minutes"
+        }
+        require(maxAttempts in 1..MAX_AUDIO_ATTEMPTS) {
+            "Maximum audio attempts must be between 1 and $MAX_AUDIO_ATTEMPTS"
+        }
+    }
+
+    private companion object {
+        const val MAX_PROVIDER_UPLOAD_BYTES = 25L * 1024 * 1024
+        const val MAX_AUDIO_DURATION_MINUTES = 30
+        const val MAX_AUDIO_ATTEMPTS = 10
     }
 }
 
@@ -146,29 +171,17 @@ private fun Map<String, String>.required(name: String): String =
         ?: error("Missing required environment variable: $name")
 
 private fun Map<String, String>.aiConfig(): AiConfig {
-    val configuredProvider = get("AI_PROVIDER")
-        ?.takeIf(String::isNotBlank)
-        ?: required("SOVA_AI_PROVIDER")
-    val provider = runCatching {
-        AiProviderType.valueOf(configuredProvider.uppercase(Locale.ROOT))
-    }.getOrElse {
-        throw IllegalArgumentException("Environment variable AI_PROVIDER must be gemini or groq")
+    val configuredProvider = get("AI_PROVIDER")?.takeIf(String::isNotBlank)
+    require(configuredProvider == null || configuredProvider.equals("gemini", ignoreCase = true)) {
+        "Environment variable AI_PROVIDER must be gemini"
     }
-    val settings = when (provider) {
-        AiProviderType.GROQ -> GroqAiConfig(
-            apiKey = required("GROQ_API_KEY"),
-            model = required("GROQ_MODEL"),
-        )
-        AiProviderType.GEMINI -> GeminiAiConfig(
+    return AiConfig(
+        settings = GeminiAiConfig(
             project = required("GOOGLE_CLOUD_PROJECT"),
             location = get("GOOGLE_CLOUD_LOCATION")?.takeIf(String::isNotBlank) ?: DEFAULT_GOOGLE_CLOUD_LOCATION,
             model = get("GEMINI_MODEL")?.takeIf(String::isNotBlank) ?: DEFAULT_GEMINI_MODEL,
             credentialsPath = required("GOOGLE_APPLICATION_CREDENTIALS"),
-        )
-    }
-    return AiConfig(
-        provider = provider,
-        settings = settings,
+        ),
         maxToolIterations = optionalPositiveInt("MAX_TOOL_ITERATIONS") ?: DEFAULT_MAX_TOOL_ITERATIONS,
     )
 }
@@ -183,6 +196,13 @@ private fun Map<String, String>.optionalPort(name: String): Int? =
 private fun Map<String, String>.optionalPositiveInt(name: String): Int? =
     get(name)?.let { rawValue ->
         rawValue.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?: error("Environment variable $name must be a positive integer")
+    }
+
+private fun Map<String, String>.optionalPositiveLong(name: String): Long? =
+    get(name)?.let { rawValue ->
+        rawValue.toLongOrNull()
             ?.takeIf { it > 0 }
             ?: error("Environment variable $name must be a positive integer")
     }

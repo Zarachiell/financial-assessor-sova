@@ -213,7 +213,7 @@ class WhatsappAiFinancialIntegrationTest {
         from = from,
         to = WhatsappAddress("whatsapp:+15550000000"),
         body = text,
-        numMedia = 0,
+        media = emptyList(),
     )
 
     private fun tool(id: String, name: String, arguments: String) = AiResponse(

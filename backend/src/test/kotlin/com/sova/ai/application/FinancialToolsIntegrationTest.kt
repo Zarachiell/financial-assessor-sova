@@ -32,6 +32,23 @@ import kotlin.test.assertTrue
 
 class FinancialToolsIntegrationTest {
     @Test
+    fun `audio tool context preserves source and MessageSid on transaction`() = runBlocking {
+        withFixture { fixture ->
+            fixture.dispatch(
+                "create_transaction",
+                """{"type":"EXPENSE","amount":35,"description":"almoço","category":"Alimentação","occurredOn":"2026-08-25"}""",
+                fixture.userA,
+                "SM-AUDIO-EXPENSE",
+                FinancialSource.WHATSAPP_AUDIO,
+            )
+
+            val transaction = fixture.service.listTransactions(fixture.userA).successValue().single()
+            assertEquals(FinancialSource.WHATSAPP_AUDIO, transaction.source)
+            assertEquals("SM-AUDIO-EXPENSE", transaction.sourceReferenceId?.value)
+        }
+    }
+
+    @Test
     fun `all financial tools execute locally with shared household authorship and idempotency`() = runBlocking {
         withFixture { fixture ->
             val catalog = fixture.service.listCategories(fixture.userA).successValue().associateBy { it.name.value }
@@ -400,9 +417,10 @@ private data class FinancialToolFixture(
         arguments: String,
         financialContext: FinancialContext,
         messageSid: String,
+        source: FinancialSource = FinancialSource.WHATSAPP_TEXT,
     ): ToolDispatchResult = dispatcher.dispatch(
         AiToolCall("call-$messageSid", name, arguments),
-        ToolExecutionContext(financialContext, messageSid),
+        ToolExecutionContext(financialContext, messageSid, source),
     )
 }
 

@@ -22,7 +22,7 @@ A IA principal será externa inicialmente para preservar recursos locais.
 | Migrations | Flyway |
 | SQL | jOOQ |
 | WhatsApp | Twilio |
-| IA | Gemini via Google Cloud; Groq como rollback temporário |
+| IA | Gemini via Google Cloud |
 | IA local futura | Ollama |
 | Proxy/TLS | Caddy |
 | Infra | Docker Compose |
@@ -73,7 +73,7 @@ Sova
   │
   │ HTTPS outbound
   ▼
-AiProvider externo (Gemini ou Groq)
+AiProvider externo (Gemini)
   │
   │ tool_call
   ▼
@@ -228,7 +228,6 @@ Providers:
 
 ```text
 GeminiAiProvider
-GroqAiProvider
 OllamaAiProvider
 ```
 
@@ -445,7 +444,7 @@ Caddy :443
        postgres
 ```
 
-Gemini e o fallback Groq são acessados exclusivamente por chamadas HTTPS outbound do `sova-api`.
+Gemini é acessado exclusivamente por chamadas HTTPS outbound do `sova-api`.
 
 ## Decisões arquiteturais
 
@@ -480,7 +479,7 @@ Motivo:
 - mantém jobs após restart;
 - volume esperado baixo.
 
-### Escolha: Groq inicialmente
+### Escolha histórica: Groq inicialmente
 
 Motivo:
 
@@ -496,9 +495,9 @@ Motivo:
 - evita as limitações operacionais encontradas no free tier do Groq;
 - usa ADC com Service Account e IAM explícito;
 - preserva o mesmo `AiProvider` e o local tool calling;
-- mantém Groq temporariamente disponível para rollback.
+- atende texto, áudio e, na fase própria, imagens com um único provider operacional.
 
-Detalhes: `docs/ADR/0004-gemini-google-cloud-com-fallback-groq.md`.
+Detalhes: `docs/ADR/0006-gemini-como-provider-exclusivo.md`.
 
 ### Escolha: household compartilhado
 

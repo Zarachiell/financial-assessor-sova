@@ -3,6 +3,7 @@ package com.sova.whatsapp.infrastructure.persistence
 import com.sova.shared.infrastructure.database.PostgresDatabase
 import com.sova.whatsapp.application.HouseholdProvisioning
 import com.sova.whatsapp.application.StoredWhatsappMessage
+import com.sova.whatsapp.application.StoredWhatsappAttachment
 import com.sova.whatsapp.application.WhatsappRepository
 import com.sova.whatsapp.domain.AuthorizedWhatsappUser
 import com.sova.whatsapp.domain.WhatsappAddress
@@ -119,17 +120,28 @@ class PostgresWhatsappRepository(
             }
         }
 
-    override suspend fun saveInboundIfNew(message: StoredWhatsappMessage): Boolean =
+    override suspend fun saveInboundIfNew(
+        message: StoredWhatsappMessage,
+        attachments: List<StoredWhatsappAttachment>,
+        audioJobAttachmentId: UUID?,
+    ): Boolean =
         withContext(Dispatchers.IO) {
-            database.withConnection { connection ->
-                val insertedRows = DSL.using(connection, SQLDialect.POSTGRES).execute(
+            require(attachments.all { it.whatsappMessageId == message.id }) {
+                "Every attachment must belong to the inbound message"
+            }
+            require(audioJobAttachmentId == null || attachments.any { it.id == audioJobAttachmentId }) {
+                "Audio job attachment must belong to the inbound message"
+            }
+            database.inTransaction { connection ->
+                val context = DSL.using(connection, SQLDialect.POSTGRES)
+                val insertedRows = context.execute(
                     """
                     INSERT INTO whatsapp_messages
                         (id, message_sid, direction, user_id, from_address, to_address, body, received_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))
                     ON CONFLICT (message_sid) DO NOTHING
                     """.trimIndent(),
-                    UUID.randomUUID(),
+                    message.id,
                     message.messageSid,
                     message.direction.name,
                     message.userId,
@@ -138,7 +150,35 @@ class PostgresWhatsappRepository(
                     message.body,
                     message.occurredAt.toString(),
                 )
-                insertedRows == 1
+                if (insertedRows != 1) return@inTransaction false
+
+                attachments.forEach { attachment ->
+                    context.execute(
+                        """
+                        INSERT INTO attachments
+                            (id, whatsapp_message_id, media_index, media_url, content_type, media_type, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """.trimIndent(),
+                        attachment.id,
+                        attachment.whatsappMessageId,
+                        attachment.mediaIndex,
+                        attachment.mediaUrl,
+                        attachment.contentType,
+                        attachment.mediaType.name,
+                        attachment.status.name,
+                    )
+                }
+                audioJobAttachmentId?.let { attachmentId ->
+                    context.execute(
+                        """
+                        INSERT INTO processing_jobs (id, type, reference_id, status)
+                        VALUES (?, 'PROCESS_AUDIO_MESSAGE', ?, 'PENDING')
+                        """.trimIndent(),
+                        UUID.randomUUID(),
+                        attachmentId,
+                    )
+                }
+                true
             }
         }
 
@@ -150,7 +190,7 @@ class PostgresWhatsappRepository(
                     (id, message_sid, direction, user_id, from_address, to_address, body, received_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))
                 """.trimIndent(),
-                UUID.randomUUID(),
+                message.id,
                 message.messageSid,
                 message.direction.name,
                 message.userId,

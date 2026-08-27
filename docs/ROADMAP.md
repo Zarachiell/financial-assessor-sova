@@ -122,8 +122,8 @@ Entregáveis:
 - `GeminiAiProvider`;
 - SDK oficial Kotlin;
 - autenticação ADC por Service Account;
-- seleção `gemini|groq` por ambiente;
-- Groq temporário para rollback;
+- Gemini como provider exclusivo após a janela de migração;
+- remoção do caminho operacional de rollback para Groq;
 - tool calling e resultados normalizados;
 - métricas de uso e finish reason;
 - secret montado somente no `sova-api` pelo Compose de produção.
@@ -204,6 +204,8 @@ Spec:
 ---
 
 ## Fase 6 — Áudio
+Status: implementada em código; validação manual no Twilio Sandbox pendente.
+
 Objetivo: permitir mensagens de voz.
 
 Pipeline:
@@ -215,7 +217,7 @@ Twilio
   ↓
 download media
   ↓
-Groq Whisper
+Gemini multimodal
   ↓
 texto
   ↓
@@ -227,7 +229,7 @@ Entregáveis:
 - Attachment metadata
 - download seguro
 - `SpeechToTextProvider`
-- `GroqWhisperProvider`
+- `GeminiSpeechToTextProvider`
 - transcrição
 - persistência da transcrição quando necessário
 - tratamento assíncrono quando necessário

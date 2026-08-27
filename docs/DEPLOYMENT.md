@@ -99,18 +99,17 @@ SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
 
 AI_PROVIDER=gemini
-SOVA_AI_PROVIDER=groq
 GOOGLE_CLOUD_PROJECT=sova-506801
 GOOGLE_CLOUD_LOCATION=global
 GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_AUDIO_MODEL=gemini-3.5-flash-lite
 MAX_TOOL_ITERATIONS=5
-
-# Mantidos temporariamente para rollback
-GROQ_API_KEY=<api-key-groq>
-GROQ_MODEL=openai/gpt-oss-120b
+SOVA_MAX_AUDIO_BYTES=16777216
+SOVA_MAX_AUDIO_DURATION_MINUTES=5
+SOVA_AUDIO_MAX_ATTEMPTS=3
 ```
 
-`AI_PROVIDER` é a seleção principal; `SOVA_AI_PROVIDER` permanece somente como fallback de compatibilidade. O Gemini usa ADC pelo arquivo montado em `/run/secrets/google_service_account`, sem API key. `GROQ_API_KEY` deve conter somente a chave, sem prefixo `Bearer`, e permanece configurada para rollback imediato.
+Gemini é o único provider operacional. Ele usa ADC pelo arquivo montado em `/run/secrets/google_service_account`, sem API key. `GEMINI_AUDIO_MODEL` pode acompanhar o modelo textual ou ser configurado separadamente.
 
 O workflow cria ou atualiza `/opt/sova/shared/.env` com permissão `600`. Não é necessário criar esse arquivo manualmente.
 
@@ -237,14 +236,6 @@ cd /opt/sova/current
 docker compose up --detach --build --remove-orphans --wait
 ```
 
-Para rollback imediato ao Groq, altere `AI_PROVIDER` em `/opt/sova/shared/.env` para `groq` e suba somente o Compose base. Isso remove a dependência do secret Google sem mudar containers, volumes ou migrations:
-
-```bash
-cd /opt/sova/current
-docker compose -f docker-compose.yml up --detach --build --remove-orphans --wait
-docker compose -f docker-compose.yml ps
-```
-
-Para retornar ao Gemini, restaure `AI_PROVIDER=gemini`, exporte novamente `GOOGLE_SERVICE_ACCOUNT_GID` pelo `stat` e use os dois arquivos Compose.
+Não existe rollback operacional para Groq. Para reativar uma release anterior, ela precisa continuar compatível com o schema aplicado e com a configuração Gemini/ADC vigente.
 
 Migrations Flyway não devem ser revertidas ou editadas. Um rollback de aplicação só é seguro quando a versão anterior permanece compatível com o schema já aplicado.

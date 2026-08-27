@@ -1,6 +1,7 @@
 package com.sova.ai.application
 
 import com.sova.finance.domain.FinancialContext
+import com.sova.finance.domain.FinancialSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -17,6 +18,7 @@ import kotlin.time.TimeSource
 data class ToolExecutionContext(
     val financialContext: FinancialContext,
     val inboundMessageSid: String,
+    val source: FinancialSource = FinancialSource.WHATSAPP_TEXT,
 )
 
 interface LocalTool {

@@ -25,8 +25,22 @@ data class InboundWhatsappMessage(
     val from: WhatsappAddress,
     val to: WhatsappAddress,
     val body: String,
-    val numMedia: Int,
-)
+    val media: List<InboundWhatsappMedia>,
+) {
+    val numMedia: Int = media.size
+}
+
+data class InboundWhatsappMedia(
+    val index: Int,
+    val mediaUrl: String,
+    val contentType: String,
+) {
+    init {
+        require(index >= 0) { "Media index must not be negative" }
+        require(mediaUrl.isNotBlank()) { "Media URL must not be blank" }
+        require(contentType.isNotBlank()) { "Media content type must not be blank" }
+    }
+}
 
 data class StoredWhatsappMessage(
     val messageSid: String,
@@ -36,6 +50,33 @@ data class StoredWhatsappMessage(
     val to: WhatsappAddress,
     val body: String,
     val occurredAt: Instant,
+    val id: UUID = UUID.randomUUID(),
+)
+
+enum class WhatsappMediaType {
+    AUDIO,
+    IMAGE,
+    DOCUMENT,
+    OTHER,
+}
+
+enum class WhatsappAttachmentStatus {
+    RECEIVED,
+    DOWNLOADING,
+    DOWNLOADED,
+    PROCESSING,
+    PROCESSED,
+    FAILED,
+}
+
+data class StoredWhatsappAttachment(
+    val id: UUID,
+    val whatsappMessageId: UUID,
+    val mediaIndex: Int,
+    val mediaUrl: String,
+    val contentType: String,
+    val mediaType: WhatsappMediaType,
+    val status: WhatsappAttachmentStatus = WhatsappAttachmentStatus.RECEIVED,
 )
 
 data class SendMessageResult(val messageSid: String) {
@@ -57,7 +98,11 @@ interface WhatsappRepository {
 
     suspend fun findActiveUser(address: WhatsappAddress): AuthorizedWhatsappUser?
 
-    suspend fun saveInboundIfNew(message: StoredWhatsappMessage): Boolean
+    suspend fun saveInboundIfNew(
+        message: StoredWhatsappMessage,
+        attachments: List<StoredWhatsappAttachment> = emptyList(),
+        audioJobAttachmentId: UUID? = null,
+    ): Boolean
 
     suspend fun saveOutbound(message: StoredWhatsappMessage)
 }
@@ -71,7 +116,13 @@ data class WhatsappConversationContext(
     val userId: UUID,
     val inboundMessageSid: String,
     val text: String,
+    val origin: WhatsappMessageOrigin = WhatsappMessageOrigin.TEXT,
 )
+
+enum class WhatsappMessageOrigin {
+    TEXT,
+    AUDIO,
+}
 
 fun interface WhatsappTextConversation {
     suspend fun respond(context: WhatsappConversationContext): String
@@ -84,6 +135,12 @@ sealed interface WhatsappHandlingResult {
         val outboundMessageSid: String,
     ) : WhatsappHandlingResult
 
+    data class Queued(
+        val userId: UUID,
+        val householdId: UUID,
+        val attachmentId: UUID,
+    ) : WhatsappHandlingResult
+
     data class Duplicate(
         val userId: UUID,
         val householdId: UUID,
@@ -92,7 +149,7 @@ sealed interface WhatsappHandlingResult {
     data object Unauthorized : WhatsappHandlingResult
 }
 
-class HandleWhatsappTextMessage(
+class HandleWhatsappMessage(
     private val repository: WhatsappRepository,
     private val senderAddress: WhatsappAddress,
     private val sender: WhatsappMessageSender,
@@ -101,20 +158,41 @@ class HandleWhatsappTextMessage(
 ) : WhatsappWebhookHandler {
     override suspend fun handle(message: InboundWhatsappMessage): WhatsappHandlingResult {
         val user = repository.findActiveUser(message.from) ?: return WhatsappHandlingResult.Unauthorized
-        val occurredAt = clock.instant()
+        val storedMessage = StoredWhatsappMessage(
+            messageSid = message.messageSid,
+            direction = WhatsappMessageDirection.INBOUND,
+            userId = user.userId,
+            from = message.from,
+            to = message.to,
+            body = message.body,
+            occurredAt = clock.instant(),
+        )
+        val attachments = message.media.map { media ->
+            StoredWhatsappAttachment(
+                id = UUID.randomUUID(),
+                whatsappMessageId = storedMessage.id,
+                mediaIndex = media.index,
+                mediaUrl = media.mediaUrl,
+                contentType = media.normalizedContentType,
+                mediaType = media.mediaType,
+            )
+        }
+        val firstAudio = attachments.firstOrNull { it.mediaType == WhatsappMediaType.AUDIO }
+        val supportedAudio = firstAudio?.takeIf { it.contentType in SUPPORTED_AUDIO_CONTENT_TYPES }
         val inserted = repository.saveInboundIfNew(
-            StoredWhatsappMessage(
-                messageSid = message.messageSid,
-                direction = WhatsappMessageDirection.INBOUND,
-                userId = user.userId,
-                from = message.from,
-                to = message.to,
-                body = message.body,
-                occurredAt = occurredAt,
-            ),
+            message = storedMessage,
+            attachments = attachments,
+            audioJobAttachmentId = supportedAudio?.id,
         )
         if (!inserted) {
             return WhatsappHandlingResult.Duplicate(user.userId, user.householdId)
+        }
+        if (supportedAudio != null) {
+            return WhatsappHandlingResult.Queued(user.userId, user.householdId, supportedAudio.id)
+        }
+        if (attachments.isNotEmpty()) {
+            val sendResult = sendAndPersist(user.userId, message.from, UNSUPPORTED_MEDIA_RESPONSE)
+            return WhatsappHandlingResult.Processed(user.userId, user.householdId, sendResult.messageSid)
         }
 
         val responseBody = if (message.body.trim().equals("ping", ignoreCase = true)) {
@@ -129,23 +207,40 @@ class HandleWhatsappTextMessage(
                 ),
             )
         }
-        val sendResult = sender.send(message.from, responseBody)
-        repository.saveOutbound(
-            StoredWhatsappMessage(
-                messageSid = sendResult.messageSid,
-                direction = WhatsappMessageDirection.OUTBOUND,
-                userId = user.userId,
-                from = senderAddress,
-                to = message.from,
-                body = responseBody,
-                occurredAt = clock.instant(),
-            ),
-        )
-
+        val sendResult = sendAndPersist(user.userId, message.from, responseBody)
         return WhatsappHandlingResult.Processed(
             userId = user.userId,
             householdId = user.householdId,
             outboundMessageSid = sendResult.messageSid,
+        )
+    }
+
+    private suspend fun sendAndPersist(
+        userId: UUID,
+        recipient: WhatsappAddress,
+        responseBody: String,
+    ): SendMessageResult {
+        val sendResult = sender.send(recipient, responseBody)
+        whatsappRepositorySaveOutbound(userId, recipient, responseBody, sendResult)
+        return sendResult
+    }
+
+    private suspend fun whatsappRepositorySaveOutbound(
+        userId: UUID,
+        recipient: WhatsappAddress,
+        responseBody: String,
+        sendResult: SendMessageResult,
+    ) {
+        repository.saveOutbound(
+            StoredWhatsappMessage(
+                messageSid = sendResult.messageSid,
+                direction = WhatsappMessageDirection.OUTBOUND,
+                userId = userId,
+                from = senderAddress,
+                to = recipient,
+                body = responseBody,
+                occurredAt = clock.instant(),
+            ),
         )
     }
 
@@ -166,8 +261,32 @@ class HandleWhatsappTextMessage(
     private companion object {
         const val NEUTRAL_RESPONSE = "Mensagem recebida. Nesta fase, envie \"ping\" para testar."
         const val SAFE_FAILURE_RESPONSE = "Não consegui processar sua mensagem agora. Tente novamente em instantes."
+        const val UNSUPPORTED_MEDIA_RESPONSE =
+            "Ainda não consigo processar esse tipo de mídia. Nesta fase, envie texto ou áudio."
+        val SUPPORTED_AUDIO_CONTENT_TYPES = setOf(
+            "audio/ogg",
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/wav",
+            "audio/aiff",
+            "audio/aac",
+            "audio/flac",
+        )
         val LOGGER = LoggerFactory.getLogger("com.sova.whatsapp.conversation")
     }
 }
+
+typealias HandleWhatsappTextMessage = HandleWhatsappMessage
+
+private val InboundWhatsappMedia.normalizedContentType: String
+    get() = contentType.substringBefore(';').trim().lowercase()
+
+private val InboundWhatsappMedia.mediaType: WhatsappMediaType
+    get() = when {
+        normalizedContentType.startsWith("audio/") -> WhatsappMediaType.AUDIO
+        normalizedContentType.startsWith("image/") -> WhatsappMediaType.IMAGE
+        normalizedContentType == "application/pdf" -> WhatsappMediaType.DOCUMENT
+        else -> WhatsappMediaType.OTHER
+    }
 
 class WhatsappDeliveryException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

@@ -104,7 +104,7 @@ class CreateTransactionTool(
                 description = description,
                 categoryId = category.id,
                 occurredOn = occurredOn,
-                source = FinancialSource.WHATSAPP_TEXT,
+                source = context.source,
                 sourceReferenceId = SourceReferenceId.of(sourceReference),
             ),
         ).requiredValue()
@@ -412,7 +412,7 @@ class CreateCashFlowEntryTool(
                 startDate = arguments.requiredDate("startDate"),
                 endDate = arguments.optionalDate("endDate"),
                 dayOfMonth = arguments.optionalInt("dayOfMonth"),
-                source = FinancialSource.WHATSAPP_TEXT,
+                source = context.source,
                 sourceReferenceId = SourceReferenceId.of(context.inboundMessageSid),
             ),
         ).requiredValue()

@@ -15,7 +15,7 @@ O sistema será utilizado por **dois usuários autorizados** pertencentes ao mes
 5. Toda operação criada por IA deve passar por validação de domínio.
 6. Toda informação importada deve manter rastreabilidade até sua origem.
 7. Dados enviados a provedores externos de IA devem ser minimizados.
-8. A arquitetura deve permitir substituir Gemini, Groq ou um provider self-hosted sem alterar o domínio.
+8. A arquitetura deve permitir substituir Gemini por um provider futuro sem alterar o domínio; Gemini é o único provider operacional atual.
 
 ## 3. Usuários e Household
 
@@ -247,7 +247,6 @@ A IA deverá atuar por meio de um contrato abstrato `AiProvider`.
 Implementações previstas:
 
 - `GeminiAiProvider`;
-- `GroqAiProvider`;
 - `OllamaAiProvider`.
 
 A aplicação deverá utilizar **local tool calling**.

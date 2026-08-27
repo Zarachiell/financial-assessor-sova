@@ -5,6 +5,8 @@ import com.sova.shared.infrastructure.database.PostgresDatabase
 import com.sova.whatsapp.application.HouseholdProvisioning
 import com.sova.whatsapp.application.ProvisionedWhatsappUser
 import com.sova.whatsapp.application.StoredWhatsappMessage
+import com.sova.whatsapp.application.StoredWhatsappAttachment
+import com.sova.whatsapp.application.WhatsappMediaType
 import com.sova.whatsapp.domain.WhatsappAddress
 import com.sova.whatsapp.domain.WhatsappMessageDirection
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
@@ -12,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.jooq.SQLDialect
 import org.jooq.impl.DSL
 import java.time.Instant
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -68,7 +71,16 @@ class PostgresWhatsappRepositoryIntegrationTest {
                     body = "ping",
                     occurredAt = Instant.parse("2026-08-24T12:00:00Z"),
                 )
-                assertTrue(repository.saveInboundIfNew(inbound))
+                val attachmentId = UUID.randomUUID()
+                val attachment = StoredWhatsappAttachment(
+                    id = attachmentId,
+                    whatsappMessageId = inbound.id,
+                    mediaIndex = 0,
+                    mediaUrl = "https://api.twilio.com/media/ME-INTEGRATION",
+                    contentType = "audio/ogg",
+                    mediaType = WhatsappMediaType.AUDIO,
+                )
+                assertTrue(repository.saveInboundIfNew(inbound, listOf(attachment), attachmentId))
                 assertFalse(repository.saveInboundIfNew(inbound))
                 repository.saveOutbound(
                     StoredWhatsappMessage(
@@ -88,6 +100,12 @@ class PostgresWhatsappRepositoryIntegrationTest {
                     assertEquals(2L, context.fetchValue("SELECT count(*) FROM users", Long::class.java))
                     assertEquals(2L, context.fetchValue("SELECT count(*) FROM whatsapp_identities", Long::class.java))
                     assertEquals(2L, context.fetchValue("SELECT count(*) FROM whatsapp_messages", Long::class.java))
+                    assertEquals(1L, context.fetchValue("SELECT count(*) FROM attachments", Long::class.java))
+                    assertEquals(1L, context.fetchValue("SELECT count(*) FROM processing_jobs", Long::class.java))
+                    assertEquals(
+                        "PENDING",
+                        context.fetchValue("SELECT status FROM processing_jobs", String::class.java),
+                    )
                     assertEquals(
                         userA.userId,
                         context.fetchValue(
