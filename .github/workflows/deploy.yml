@@ -231,6 +231,7 @@ jobs:
           docker compose "${compose_files[@]}" run \
             --rm \
             --no-deps \
+            --no-TTY \
             --entrypoint sh \
             -e EXPECTED_GOOGLE_SERVICE_ACCOUNT_GID="$GOOGLE_SERVICE_ACCOUNT_GID" \
             sova-api -ec '
@@ -240,8 +241,27 @@ jobs:
             test -r /run/secrets/google_service_account
             printf "Sova runtime identity: uid=%s gid=%s supplementary_gids=%s; Google credentials: OK\n" \
               "$(id -u)" "$(id -g)" "$(id -G)"
-          '
-          docker compose "${compose_files[@]}" up --detach --build --remove-orphans --wait
+          ' </dev/null
+          docker compose "${compose_files[@]}" up --detach --build --remove-orphans --wait </dev/null
+
+          running_container_id="$(docker compose "${compose_files[@]}" ps --quiet sova-api)"
+          test -n "$running_container_id"
+          running_image_id="$(docker inspect --format '{{.Image}}' "$running_container_id")"
+          built_image_id="$(docker image inspect sova-sova-api:latest --format '{{.Id}}')"
+          test "$running_image_id" = "$built_image_id" || {
+            echo "Running sova-api container does not use the image built for this release" >&2
+            exit 1
+          }
+          docker compose "${compose_files[@]}" exec --no-TTY sova-api sh -ec '
+            test "$(id -u)" = "10001"
+            test "$(id -g)" = "10001"
+            if [ "$AI_PROVIDER" = "gemini" ]; then
+              test "$GOOGLE_APPLICATION_CREDENTIALS" = "/run/secrets/google_service_account"
+              test -r "$GOOGLE_APPLICATION_CREDENTIALS"
+            fi
+            printf "Sova production provider: %s; model: %s\n" \
+              "$AI_PROVIDER" "${GEMINI_MODEL:-${GROQ_MODEL:-unknown}}"
+          ' </dev/null
           docker compose "${compose_files[@]}" ps
 
           next_link="${deploy_root}/.current-${release_id}"
