@@ -98,6 +98,7 @@ class AiConversationOrchestrator(
         var availableTools = registry.definitions
         var completedBatch: List<CompletedToolExecution> = emptyList()
         var finalizationRetryUsed = false
+        val completedReadCalls = mutableSetOf<Pair<String, String>>()
         while (true) {
             val response = try {
                 complete(messages, availableTools, context, completedToolRounds)
@@ -114,6 +115,15 @@ class AiConversationOrchestrator(
                     return UNGROUNDED_ANALYTIC_FALLBACK
                 }
                 return applySovaVoice(finalText, completedBatch, context).take(MAX_OUTBOUND_MESSAGE_LENGTH)
+            }
+            if (response.toolCalls.all { call -> (call.name to call.arguments) in completedReadCalls }) {
+                if (!finalizationRetryUsed) {
+                    finalizationRetryUsed = true
+                    availableTools = emptyList()
+                    messages += AiMessage(AiMessageRole.USER, FINALIZATION_RETRY_PROMPT)
+                    continue
+                }
+                return localFallback(completedBatch, context, AiConversationException("AI repeated a completed tool"))
             }
             if (availableTools.isEmpty() && completedBatch.isNotEmpty()) {
                 if (!finalizationRetryUsed && completedBatch.none { it.name in PERSISTED_WRITE_TOOLS }) {
@@ -140,13 +150,26 @@ class AiConversationOrchestrator(
             }
             val batchSucceeded = executedBatch.all { it.result.successful }
             completedBatch = if (batchSucceeded) {
-                executedBatch
+                completedBatch + executedBatch
             } else {
                 completedBatch + executedBatch.filter { execution ->
                     execution.name in PERSISTED_WRITE_TOOLS && execution.result.successful
                 }
             }
-            availableTools = if (batchSucceeded) emptyList() else registry.definitions
+            val writePersisted = executedBatch.any { execution ->
+                execution.name in PERSISTED_WRITE_TOOLS && execution.result.successful
+            }
+            response.toolCalls.zip(executedBatch)
+                .filter { (_, execution) -> execution.result.successful && execution.name !in PERSISTED_WRITE_TOOLS }
+                .forEach { (call, _) -> completedReadCalls += call.name to call.arguments }
+            val recordLookupCompleted = executedBatch.any { execution ->
+                execution.name in RECORD_LOOKUP_TOOLS && execution.result.successful
+            }
+            availableTools = when {
+                writePersisted -> emptyList()
+                !batchSucceeded || recordLookupCompleted -> registry.definitions
+                else -> emptyList()
+            }
         }
     }
 
@@ -342,14 +365,18 @@ class AiConversationOrchestrator(
             Pai por Mãe ou Mãe por Pai.
 
             Responda em português brasileiro. Cálculos e dados financeiros vêm somente das tools. Para receita/despesa
-            clara, chame create_transaction uma vez; se valor, tipo ou intenção forem ambíguos ("acho", "uns 200"),
+            clara, chame create_transaction; se houver vários lançamentos claros, faça uma chamada por item no mesmo
+            round com itemIndex sequencial 1..N. Se valor, tipo ou intenção forem ambíguos ("acho", "uns 200"),
             confirme antes. Histórico ajuda a entender confirmações, nunca a repetir escrita.
 
             create_transaction: type INCOME/EXPENSE, amount positivo, occurredOn YYYY-MM-DD e nomes de conta/categoria;
             omita opcionais vazios. Futuro ou recorrente usa create_cash_flow_entry: recurrence ONCE/MONTHLY,
             startDate YYYY-MM-DD, dayOfMonth 1..31 obrigatório para MONTHLY e endDate opcional. Projeções usam
             get_cash_flow_projection com targetDate YYYY-MM-DD. occurrenceCount é o total combinado; para quantidades
-            por tipo use incomeOccurrenceCount e expenseOccurrenceCount. Categorias de despesa:
+            por tipo use incomeOccurrenceCount e expenseOccurrenceCount. Para listar contas futuras e descobrir o
+            identificador exato, use get_cash_flow_entries. Para quitar, use settle_cash_flow_occurrence com o
+            cashFlowEntryId e scheduledOn retornados; paidOn é a data real e não pode estar no futuro. Edição/exclusão
+            exige identificar primeiro um único registro via get_transactions ou get_cash_flow_entries. Categorias de despesa:
             ${DefaultFinancialCatalog.expenseCategories.keys.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
             restaurante = Restaurante; reembolso = Reembolso.
@@ -386,7 +413,16 @@ class AiConversationOrchestrator(
         const val CREATE_TRANSACTION_TOOL = "create_transaction"
         const val CREATE_CASH_FLOW_ENTRY_TOOL = "create_cash_flow_entry"
         const val GET_CASH_FLOW_PROJECTION_TOOL = "get_cash_flow_projection"
-        val PERSISTED_WRITE_TOOLS = setOf(CREATE_TRANSACTION_TOOL, CREATE_CASH_FLOW_ENTRY_TOOL)
+        val PERSISTED_WRITE_TOOLS = setOf(
+            CREATE_TRANSACTION_TOOL,
+            CREATE_CASH_FLOW_ENTRY_TOOL,
+            "update_transaction",
+            "delete_transaction",
+            "update_cash_flow_entry",
+            "delete_cash_flow_entry",
+            "settle_cash_flow_occurrence",
+        )
+        val RECORD_LOOKUP_TOOLS = setOf("get_transactions", "get_cash_flow_entries")
         val ANALYTIC_TOOLS = setOf(
             "get_financial_snapshot",
             "compare_periods",
@@ -395,6 +431,7 @@ class AiConversationOrchestrator(
             "get_recurring_expenses",
             "get_budget_deviations",
             "get_financial_health_snapshot",
+            "get_cash_flow_entries",
         )
         const val GENERIC_LOCAL_FALLBACK =
             "A operação financeira foi concluída localmente, mas a resposta detalhada ficou indisponível. " +

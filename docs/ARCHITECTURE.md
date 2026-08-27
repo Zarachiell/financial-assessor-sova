@@ -88,6 +88,20 @@ PostgreSQL
 
 O provider de IA não realiza conexões inbound com a KVM.
 
+## Liquidação de fluxo de caixa
+
+```text
+CashFlowEntry + scheduledOn
+  ↓
+validação local da ocorrência
+  ↓
+Transaction (data real)
+  +
+CashFlowSettlement (vencimento, autor, instante)
+```
+
+A Transaction e o CashFlowSettlement são persistidos na mesma transação PostgreSQL. A constraint por `(household_id, cash_flow_entry_id, scheduled_on)` impede quitação duplicada. Projeções ignoram ocorrências liquidadas; o saldo considera a Transaction real. Comprovantes de mídia serão vinculados ao settlement somente após a Fase 7 de imagens.
+
 ## Local Tool Calling
 
 Exemplo:

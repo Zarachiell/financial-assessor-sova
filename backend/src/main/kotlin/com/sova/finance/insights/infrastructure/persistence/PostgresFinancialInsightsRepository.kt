@@ -48,7 +48,7 @@ class PostgresFinancialInsightsRepository(
                     COALESCE(SUM(amount) FILTER (WHERE type = 'EXPENSE'), 0) AS total_expenses,
                     COUNT(*) AS transaction_count
                 FROM transactions
-                WHERE household_id = ? AND occurred_on BETWEEN ? AND ?
+                WHERE household_id = ? AND deleted_at IS NULL AND occurred_on BETWEEN ? AND ?
                 """.trimIndent(),
                 householdId,
                 period.from,
@@ -78,6 +78,7 @@ class PostgresFinancialInsightsRepository(
             FROM transactions t
             JOIN categories c ON c.household_id = t.household_id AND c.id = t.category_id
             WHERE t.household_id = ?
+              AND t.deleted_at IS NULL
               AND t.type = ?
               AND t.occurred_on BETWEEN ? AND ?
             GROUP BY c.id, c.name, c.expense_nature
@@ -112,6 +113,7 @@ class PostgresFinancialInsightsRepository(
             FROM transactions t
             JOIN categories c ON c.household_id = t.household_id AND c.id = t.category_id
             WHERE t.household_id = ?
+              AND t.deleted_at IS NULL
               AND t.type = 'EXPENSE'
               AND t.occurred_on BETWEEN ? AND ?
               $categoryCondition
@@ -141,6 +143,7 @@ class PostgresFinancialInsightsRepository(
                    SUM(amount) AS total
             FROM transactions
             WHERE household_id = ?
+              AND deleted_at IS NULL
               AND type = 'EXPENSE'
               AND occurred_on BETWEEN ? AND ?
               $categoryCondition
@@ -185,6 +188,7 @@ class PostgresFinancialInsightsRepository(
                 FROM transactions t
                 JOIN categories c ON c.household_id = t.household_id AND c.id = t.category_id
                 WHERE t.household_id = ?
+                  AND t.deleted_at IS NULL
                   AND t.type = 'EXPENSE'
                   AND t.occurred_on BETWEEN ? AND ?
             ), candidate_keys AS (
@@ -232,7 +236,7 @@ class PostgresFinancialInsightsRepository(
                     0
                 ) AS balance
                 FROM transactions
-                WHERE household_id = ?
+                WHERE household_id = ? AND deleted_at IS NULL
                 """.trimIndent(),
                 householdId,
             ),

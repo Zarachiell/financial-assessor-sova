@@ -121,6 +121,50 @@ class AiConversationOrchestratorTest {
     }
 
     @Test
+    fun `allows record lookup followed by one persisted correction`() = runBlocking {
+        val transactions = RecordingTool("get_transactions")
+        val update = RecordingTool("update_transaction")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-find", "get_transactions", "{}")),
+                toolCalls(
+                    AiToolCall("call-update", "update_transaction", "{}"),
+                ),
+                answer("Corrigi a despesa encontrada."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(transactions, update)) { emptyList() }
+
+        val result = orchestrator.respond(context("Aquela despesa estava errada, corrija para 40"))
+
+        assertTrue(result.contains("corrigi a despesa", ignoreCase = true))
+        assertEquals(1, transactions.executions.size)
+        assertEquals(1, update.executions.size)
+        assertTrue(provider.requests[1].tools.isNotEmpty())
+        assertTrue(provider.requests[2].tools.isEmpty())
+    }
+
+    @Test
+    fun `executes multiple transaction writes from one message in the same round`() = runBlocking {
+        val create = RecordingTool("create_transaction")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(
+                    AiToolCall("call-first", "create_transaction", "{}"),
+                    AiToolCall("call-second", "create_transaction", "{}"),
+                ),
+                answer("Registrei as duas despesas."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(create)) { emptyList() }
+
+        orchestrator.respond(context("Gastei 10 no café e 20 no mercado"))
+
+        assertEquals(2, create.executions.size)
+        assertTrue(provider.requests.last().tools.isEmpty())
+    }
+
+    @Test
     fun `retries a textual final when Gemini repeats a completed read tool`() = runBlocking {
         val transactions = RecordingTool("get_transactions")
         val provider = QueueAiProvider(
@@ -140,7 +184,7 @@ class AiConversationOrchestratorTest {
         )
         assertEquals(1, transactions.executions.size)
         assertEquals(3, provider.requests.size)
-        assertTrue(provider.requests[1].tools.isEmpty())
+        assertTrue(provider.requests[1].tools.isNotEmpty())
         assertTrue(
             provider.requests[2].messages.any { message ->
                 message.content?.contains("N\u00e3o chame nenhuma ferramenta novamente.") == true

@@ -14,6 +14,11 @@ data class CashFlowOccurrence(
     val accountId: UUID?,
 )
 
+data class CashFlowOccurrenceKey(
+    val entryId: UUID,
+    val scheduledOn: LocalDate,
+)
+
 data class CashFlowProjection(
     val currentBalance: BigDecimal,
     val expectedIncome: BigDecimal,
@@ -74,9 +79,12 @@ class CashFlowProjectionCalculator(
         entries: List<CashFlowEntry>,
         fromDate: LocalDate,
         targetDate: LocalDate,
+        settledOccurrences: Set<CashFlowOccurrenceKey> = emptySet(),
     ): CashFlowProjection {
         val occurrences = entries.flatMap { entry ->
             occurrenceCalculator.occurrences(entry, fromDate, targetDate)
+        }.filterNot { occurrence ->
+            CashFlowOccurrenceKey(occurrence.entryId, occurrence.date) in settledOccurrences
         }
         val expectedIncome = occurrences
             .filter { it.type == FinancialEntryType.INCOME }

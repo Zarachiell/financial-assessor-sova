@@ -286,8 +286,8 @@ Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.y
 
 ## Status
 
-Fase 5 — financial insights implementada localmente. O Sova calcula snapshots, comparações, tendências,
-maiores despesas, recorrências heurísticas, desvios, taxa de poupança, projeção mensal e planos simples de
-economia no backend/PostgreSQL. O provider recebe apenas métricas agregadas para explicá-las. Classificações de
-despesas, limites, thresholds e isolamento por household possuem cobertura automatizada sem chamadas reais ao
-Gemini/Groq ou à Twilio.
+Fase 5.5 — gestão de registros e liquidação implementada. Além dos insights da Fase 5, o Sova corrige e exclui
+logicamente transações, registra várias despesas na mesma mensagem, detalha ocorrências futuras pendentes/pagas e
+quita cada ocorrência de forma idempotente. A quitação cria atomicamente a transação real e deixa de contar a
+previsão como pendente. Autoria, isolamento por household, migration V7 e fluxos Gemini/local tool calling possuem
+cobertura automatizada sem chamadas reais ao Gemini/Groq ou à Twilio.

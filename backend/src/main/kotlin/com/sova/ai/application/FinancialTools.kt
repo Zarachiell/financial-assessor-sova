@@ -2,11 +2,17 @@ package com.sova.ai.application
 
 import com.sova.finance.application.CreateCashFlowEntryCommand
 import com.sova.finance.application.CreateTransactionCommand
+import com.sova.finance.application.CashFlowOccurrenceStatus
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.application.FinancialResult
+import com.sova.finance.application.GetCashFlowOccurrencesQuery
 import com.sova.finance.application.GetCashFlowProjectionQuery
+import com.sova.finance.application.SettleCashFlowOccurrenceCommand
 import com.sova.finance.application.TransactionFilters
+import com.sova.finance.application.UpdateCashFlowEntryCommand
+import com.sova.finance.application.UpdateTransactionCommand
 import com.sova.finance.domain.Account
+import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.FinancialDescription
@@ -30,18 +36,25 @@ import java.math.RoundingMode
 import java.text.Normalizer
 import java.time.LocalDate
 import java.util.Locale
+import java.util.UUID
 
 fun financialLocalTools(
     service: FinancialApplicationService,
     insightsService: FinancialInsightsApplicationService? = null,
 ): List<LocalTool> = listOf(
     CreateTransactionTool(service),
+    UpdateTransactionTool(service),
+    DeleteTransactionTool(service),
     GetCurrentBalanceTool(service),
     GetExpensesTool(service),
     GetIncomeTool(service),
     GetTransactionsTool(service),
     GetCategorySummaryTool(service),
     CreateCashFlowEntryTool(service),
+    UpdateCashFlowEntryTool(service),
+    DeleteCashFlowEntryTool(service),
+    GetCashFlowEntriesTool(service),
+    SettleCashFlowOccurrenceTool(service),
     GetCashFlowProjectionTool(service),
 ) + insightsService?.let { financialInsightTools(service, it) }.orEmpty()
 
@@ -50,7 +63,7 @@ class CreateTransactionTool(
 ) : FinancialLocalTool(service) {
     override val definition = AiToolDefinition(
         name = "create_transaction",
-        description = "Registra localmente uma única receita ou despesa confirmada pelo usuário.",
+        description = "Registra localmente uma receita ou despesa confirmada; pode ser chamada várias vezes na mesma mensagem.",
         parameters = AiToolParameters(
             properties = mapOf(
                 "type" to stringParameter("Tipo da transação.", "INCOME", "EXPENSE"),
@@ -59,6 +72,9 @@ class CreateTransactionTool(
                 "category" to stringParameter("Nome da categoria financeira."),
                 "occurredOn" to stringParameter("Data civil no formato YYYY-MM-DD."),
                 "account" to stringParameter("Nome da conta; omita para usar a conta padrão."),
+                "itemIndex" to integerParameter(
+                    "Posição 1..8 obrigatória quando a mensagem contiver mais de um lançamento; omita para apenas um.",
+                ),
             ),
             required = setOf("type", "amount", "description", "category", "occurredOn"),
         ),
@@ -71,6 +87,14 @@ class CreateTransactionTool(
         val amount = Money.of(arguments.requiredDecimal("amount"))
         val description = FinancialDescription.of(arguments.requiredString("description"))
         val occurredOn = arguments.requiredDate("occurredOn")
+        val itemIndex = arguments.optionalInt("itemIndex")?.also {
+            require(it in 1..MAX_TRANSACTION_ITEMS) { "itemIndex must be between 1 and $MAX_TRANSACTION_ITEMS" }
+        }
+        val sourceReference = if (itemIndex == null) {
+            context.inboundMessageSid
+        } else {
+            "${context.inboundMessageSid}:$itemIndex"
+        }
         val creation = service.createTransaction(
             context.financialContext,
             CreateTransactionCommand(
@@ -81,13 +105,14 @@ class CreateTransactionTool(
                 categoryId = category.id,
                 occurredOn = occurredOn,
                 source = FinancialSource.WHATSAPP_TEXT,
-                sourceReferenceId = SourceReferenceId.of(context.inboundMessageSid),
+                sourceReferenceId = SourceReferenceId.of(sourceReference),
             ),
         ).requiredValue()
 
         return buildJsonObject {
             put("ok", JsonPrimitive(true))
             put("created", JsonPrimitive(creation.created))
+            put("transactionId", JsonPrimitive(creation.value.id.toString()))
             put("type", JsonPrimitive(creation.value.type.name))
             put("amount", moneyJson(creation.value.money.amount))
             put("currency", JsonPrimitive(creation.value.currency.name))
@@ -95,6 +120,90 @@ class CreateTransactionTool(
             put("category", JsonPrimitive(category.name.value))
             put("account", JsonPrimitive(account.name.value))
             put("occurredOn", JsonPrimitive(creation.value.occurredOn.toString()))
+        }
+    }
+
+    private companion object {
+        const val MAX_TRANSACTION_ITEMS = 8
+    }
+}
+
+class UpdateTransactionTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "update_transaction",
+        description = "Corrige uma transação existente identificada por um transactionId retornado pelas tools de consulta.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "transactionId" to stringParameter("Identificador exato retornado por get_transactions."),
+                "type" to stringParameter("Novo tipo, se precisar corrigir.", "INCOME", "EXPENSE"),
+                "amount" to numberParameter("Novo valor positivo em BRL."),
+                "description" to stringParameter("Nova descrição."),
+                "category" to stringParameter("Nova categoria; obrigatória ao trocar o tipo."),
+                "occurredOn" to stringParameter("Nova data civil YYYY-MM-DD."),
+                "account" to stringParameter("Nova conta."),
+            ),
+            required = setOf("transactionId"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        require(arguments.keys.any { it != "transactionId" }) { "At least one transaction field must be changed" }
+        val transactionId = arguments.requiredUuid("transactionId")
+        val current = service.findTransaction(context.financialContext, transactionId).requiredValue()
+        val type = arguments.optionalEntryType("type") ?: current.type
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+            ?: accountById(context, current.accountId)
+        val category = arguments.optionalString("category")?.let { resolveCategory(context, it, type) }
+            ?: if (type == current.type) {
+                categoryById(context, current.categoryId)
+            } else {
+                throw ToolRejectedException("category_required_for_type_change")
+            }
+        val updated = service.updateTransaction(
+            context.financialContext,
+            transactionId,
+            UpdateTransactionCommand(
+                accountId = account.id,
+                type = type,
+                money = arguments.optionalDecimal("amount")?.let(Money::of) ?: current.money,
+                description = arguments.optionalString("description")?.let(FinancialDescription::of)
+                    ?: current.description,
+                categoryId = category.id,
+                occurredOn = arguments.optionalDate("occurredOn") ?: current.occurredOn,
+            ),
+        ).requiredValue()
+        return updated.toToolJson(account, category, operation = "updated")
+    }
+}
+
+class DeleteTransactionTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "delete_transaction",
+        description = "Exclui logicamente uma transação cadastrada por engano, preservando autoria e auditoria.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "transactionId" to stringParameter("Identificador exato retornado por get_transactions."),
+            ),
+            required = setOf("transactionId"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val deleted = service.deleteTransaction(
+            context.financialContext,
+            arguments.requiredUuid("transactionId"),
+        ).requiredValue()
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("deleted", JsonPrimitive(true))
+            put("transactionId", JsonPrimitive(deleted.id.toString()))
+            put("description", JsonPrimitive(deleted.description.value))
+            put("amount", moneyJson(deleted.money.amount))
+            put("currency", JsonPrimitive(deleted.currency.name))
         }
     }
 }
@@ -311,6 +420,7 @@ class CreateCashFlowEntryTool(
         return buildJsonObject {
             put("ok", JsonPrimitive(true))
             put("created", JsonPrimitive(creation.created))
+            put("cashFlowEntryId", JsonPrimitive(creation.value.id.toString()))
             put("type", JsonPrimitive(creation.value.type.name))
             put("amount", moneyJson(creation.value.money.amount))
             put("currency", JsonPrimitive(creation.value.currency.name))
@@ -321,6 +431,234 @@ class CreateCashFlowEntryTool(
             creation.value.dayOfMonth?.let { put("dayOfMonth", JsonPrimitive(it)) }
             category?.let { put("category", JsonPrimitive(it.name.value)) }
             account?.let { put("account", JsonPrimitive(it.name.value)) }
+        }
+    }
+}
+
+class UpdateCashFlowEntryTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "update_cash_flow_entry",
+        description = "Corrige uma conta, receita ou despesa futura ainda sem pagamentos vinculados.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "cashFlowEntryId" to stringParameter("Identificador exato retornado por get_cash_flow_entries."),
+                "type" to stringParameter("Novo tipo.", "INCOME", "EXPENSE"),
+                "amount" to numberParameter("Novo valor positivo em BRL."),
+                "description" to stringParameter("Nova descrição."),
+                "recurrence" to stringParameter("Nova recorrência.", "ONCE", "MONTHLY"),
+                "startDate" to stringParameter("Nova data inicial YYYY-MM-DD."),
+                "endDate" to stringParameter("Nova data final inclusiva YYYY-MM-DD."),
+                "dayOfMonth" to integerParameter("Novo dia 1..31 para MONTHLY."),
+                "category" to stringParameter("Nova categoria; obrigatória ao trocar o tipo."),
+                "account" to stringParameter("Nova conta."),
+            ),
+            required = setOf("cashFlowEntryId"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        require(arguments.keys.any { it != "cashFlowEntryId" }) { "At least one cash flow field must be changed" }
+        val entryId = arguments.requiredUuid("cashFlowEntryId")
+        val current = service.findCashFlowEntry(context.financialContext, entryId).requiredValue()
+        val type = arguments.optionalEntryType("type") ?: current.type
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+            ?: current.accountId?.let { accountById(context, it) }
+        val category = arguments.optionalString("category")?.let { resolveCategory(context, it, type) }
+            ?: if (type == current.type) {
+                current.categoryId?.let { categoryById(context, it) }
+            } else {
+                throw ToolRejectedException("category_required_for_type_change")
+            }
+        val recurrence = arguments.optionalString("recurrence")?.let(CashFlowRecurrence::valueOf)
+            ?: current.recurrence
+        val dayOfMonth = when (recurrence) {
+            CashFlowRecurrence.ONCE -> null
+            CashFlowRecurrence.MONTHLY -> arguments.optionalInt("dayOfMonth") ?: current.dayOfMonth
+        }
+        val updated = service.updateCashFlowEntry(
+            context.financialContext,
+            entryId,
+            UpdateCashFlowEntryCommand(
+                type = type,
+                money = arguments.optionalDecimal("amount")?.let(Money::of) ?: current.money,
+                description = arguments.optionalString("description")?.let(FinancialDescription::of)
+                    ?: current.description,
+                accountId = account?.id,
+                categoryId = category?.id,
+                recurrence = recurrence,
+                startDate = arguments.optionalDate("startDate") ?: current.startDate,
+                endDate = arguments.optionalDate("endDate") ?: current.endDate,
+                dayOfMonth = dayOfMonth,
+                active = current.active,
+            ),
+        ).requiredValue()
+        return updated.toToolJson(account, category, operation = "updated")
+    }
+}
+
+class DeleteCashFlowEntryTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "delete_cash_flow_entry",
+        description = "Exclui logicamente uma conta, receita ou despesa futura cadastrada por engano e ainda não paga.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "cashFlowEntryId" to stringParameter("Identificador exato retornado por get_cash_flow_entries."),
+            ),
+            required = setOf("cashFlowEntryId"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val deleted = service.deleteCashFlowEntry(
+            context.financialContext,
+            arguments.requiredUuid("cashFlowEntryId"),
+        ).requiredValue()
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("deleted", JsonPrimitive(true))
+            put("cashFlowEntryId", JsonPrimitive(deleted.id.toString()))
+            put("description", JsonPrimitive(deleted.description.value))
+            put("amount", moneyJson(deleted.money.amount))
+            put("currency", JsonPrimitive(deleted.currency.name))
+        }
+    }
+}
+
+class GetCashFlowEntriesTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "get_cash_flow_entries",
+        description = "Detalha contas, receitas e despesas previstas, informando quais ocorrências estão pendentes ou pagas.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "from" to stringParameter("Data inicial inclusiva YYYY-MM-DD."),
+                "to" to stringParameter("Data final inclusiva YYYY-MM-DD."),
+                "type" to stringParameter("Tipo opcional.", "INCOME", "EXPENSE"),
+                "status" to stringParameter("Status opcional.", "PENDING", "PAID"),
+                "account" to stringParameter("Nome opcional da conta."),
+                "limit" to integerParameter("Máximo de ocorrências, entre 1 e 100; padrão 50."),
+            ),
+            required = setOf("from", "to"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+        val limit = (arguments.optionalInt("limit") ?: DEFAULT_CASH_FLOW_LIMIT).also {
+            require(it in 1..MAX_CASH_FLOW_LIMIT) { "limit must be between 1 and $MAX_CASH_FLOW_LIMIT" }
+        }
+        val occurrences = service.getCashFlowOccurrences(
+            context.financialContext,
+            GetCashFlowOccurrencesQuery(
+                from = arguments.requiredDate("from"),
+                to = arguments.requiredDate("to"),
+                type = arguments.optionalEntryType("type"),
+                accountId = account?.id,
+                status = arguments.optionalString("status")?.let(CashFlowOccurrenceStatus::valueOf),
+            ),
+        ).requiredValue()
+        val accounts = accounts(context).associateBy(Account::id)
+        val categories = categories(context).associateBy(Category::id)
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("count", JsonPrimitive(minOf(occurrences.size, limit)))
+            put("totalCount", JsonPrimitive(occurrences.size))
+            put("truncated", JsonPrimitive(occurrences.size > limit))
+            put(
+                "entries",
+                buildJsonArray {
+                    occurrences.take(limit).forEach { occurrence ->
+                        val entry = occurrence.entry
+                        add(
+                            buildJsonObject {
+                                put("cashFlowEntryId", JsonPrimitive(entry.id.toString()))
+                                put("scheduledOn", JsonPrimitive(occurrence.scheduledOn.toString()))
+                                put("status", JsonPrimitive(occurrence.status.name))
+                                put("type", JsonPrimitive(entry.type.name))
+                                put("amount", moneyJson(entry.money.amount))
+                                put("currency", JsonPrimitive(entry.currency.name))
+                                put("description", JsonPrimitive(entry.description.value))
+                                put("recurrence", JsonPrimitive(entry.recurrence.name))
+                                put("active", JsonPrimitive(entry.active))
+                                entry.accountId?.let { accounts[it]?.name?.value }?.let {
+                                    put("account", JsonPrimitive(it))
+                                }
+                                entry.categoryId?.let { categories[it]?.name?.value }?.let {
+                                    put("category", JsonPrimitive(it))
+                                }
+                                occurrence.receipt?.let { receipt ->
+                                    put("settlementId", JsonPrimitive(receipt.settlement.id.toString()))
+                                    put("transactionId", JsonPrimitive(receipt.transaction.id.toString()))
+                                    put("paidOn", JsonPrimitive(receipt.transaction.occurredOn.toString()))
+                                    put("settledAt", JsonPrimitive(receipt.settlement.settledAt.toString()))
+                                }
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    private companion object {
+        const val DEFAULT_CASH_FLOW_LIMIT = 50
+        const val MAX_CASH_FLOW_LIMIT = 100
+    }
+}
+
+class SettleCashFlowOccurrenceTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "settle_cash_flow_occurrence",
+        description = "Marca uma ocorrência futura como paga ou recebida e cria a transação real na data informada.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "cashFlowEntryId" to stringParameter("Identificador retornado por get_cash_flow_entries."),
+                "scheduledOn" to stringParameter("Vencimento exato da ocorrência, no formato YYYY-MM-DD."),
+                "paidOn" to stringParameter("Data real do pagamento ou recebimento, no formato YYYY-MM-DD."),
+                "account" to stringParameter("Conta; obrigatória somente se a previsão não tiver conta."),
+                "category" to stringParameter("Categoria; obrigatória somente se a previsão não tiver categoria."),
+            ),
+            required = setOf("cashFlowEntryId", "scheduledOn", "paidOn"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val entryId = arguments.requiredUuid("cashFlowEntryId")
+        val entry = service.findCashFlowEntry(context.financialContext, entryId).requiredValue()
+        val account = arguments.optionalString("account")?.let { resolveAccount(context, it) }
+        val category = arguments.optionalString("category")?.let { resolveCategory(context, it, entry.type) }
+        val creation = service.settleCashFlowOccurrence(
+            context.financialContext,
+            entryId,
+            SettleCashFlowOccurrenceCommand(
+                scheduledOn = arguments.requiredDate("scheduledOn"),
+                paidOn = arguments.requiredDate("paidOn"),
+                accountId = account?.id,
+                categoryId = category?.id,
+            ),
+        ).requiredValue()
+        val receipt = creation.value
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("created", JsonPrimitive(creation.created))
+            put("status", JsonPrimitive("PAID"))
+            put("cashFlowEntryId", JsonPrimitive(entryId.toString()))
+            put("settlementId", JsonPrimitive(receipt.settlement.id.toString()))
+            put("transactionId", JsonPrimitive(receipt.transaction.id.toString()))
+            put("scheduledOn", JsonPrimitive(receipt.settlement.scheduledOn.toString()))
+            put("paidOn", JsonPrimitive(receipt.transaction.occurredOn.toString()))
+            put("settledAt", JsonPrimitive(receipt.settlement.settledAt.toString()))
+            put("type", JsonPrimitive(receipt.transaction.type.name))
+            put("amount", moneyJson(receipt.transaction.money.amount))
+            put("currency", JsonPrimitive(receipt.transaction.currency.name))
+            put("description", JsonPrimitive(receipt.transaction.description.value))
         }
     }
 }
@@ -374,6 +712,14 @@ abstract class FinancialLocalTool(
 
     protected suspend fun categories(context: ToolExecutionContext): List<Category> =
         service.listCategories(context.financialContext).requiredValue()
+
+    protected suspend fun accountById(context: ToolExecutionContext, accountId: UUID): Account =
+        accounts(context).singleOrNull { it.id == accountId }
+            ?: throw ToolRejectedException("account_not_found")
+
+    protected suspend fun categoryById(context: ToolExecutionContext, categoryId: UUID): Category =
+        categories(context).singleOrNull { it.id == categoryId }
+            ?: throw ToolRejectedException("category_not_found")
 
     protected suspend fun transactions(
         context: ToolExecutionContext,
@@ -483,12 +829,20 @@ private fun JsonObject.requiredDecimal(name: String): BigDecimal =
     this[name]?.jsonPrimitive?.content?.toBigDecimalOrNull()
         ?: throw IllegalArgumentException("Argument $name must be a decimal")
 
+private fun JsonObject.optionalDecimal(name: String): BigDecimal? =
+    this[name]?.jsonPrimitive?.content?.toBigDecimalOrNull()
+        ?: if (name in this) throw IllegalArgumentException("Argument $name must be a decimal") else null
+
 private fun JsonObject.requiredDate(name: String): LocalDate =
     LocalDate.parse(requiredString(name))
 
 private fun JsonObject.optionalDate(name: String): LocalDate? = optionalString(name)?.let(LocalDate::parse)
 
 private fun JsonObject.optionalInt(name: String): Int? = this[name]?.jsonPrimitive?.intOrNull
+
+private fun JsonObject.requiredUuid(name: String): UUID =
+    runCatching { UUID.fromString(requiredString(name)) }
+        .getOrElse { throw IllegalArgumentException("Argument $name must be a UUID") }
 
 private fun JsonObject.requiredEntryType(name: String): FinancialEntryType =
     FinancialEntryType.valueOf(requiredString(name))
@@ -515,6 +869,7 @@ private fun Transaction.toMinimalJson(
     accounts: Map<java.util.UUID, Account>,
     categories: Map<java.util.UUID, Category>,
 ): JsonObject = buildJsonObject {
+    put("transactionId", JsonPrimitive(id.toString()))
     put("type", JsonPrimitive(type.name))
     put("amount", moneyJson(money.amount))
     put("currency", JsonPrimitive(currency.name))
@@ -522,6 +877,43 @@ private fun Transaction.toMinimalJson(
     put("occurredOn", JsonPrimitive(occurredOn.toString()))
     accounts[accountId]?.let { put("account", JsonPrimitive(it.name.value)) }
     categories[categoryId]?.let { put("category", JsonPrimitive(it.name.value)) }
+}
+
+private fun Transaction.toToolJson(
+    account: Account,
+    category: Category,
+    operation: String,
+): JsonObject = buildJsonObject {
+    put("ok", JsonPrimitive(true))
+    put(operation, JsonPrimitive(true))
+    put("transactionId", JsonPrimitive(id.toString()))
+    put("type", JsonPrimitive(type.name))
+    put("amount", moneyJson(money.amount))
+    put("currency", JsonPrimitive(currency.name))
+    put("description", JsonPrimitive(description.value))
+    put("category", JsonPrimitive(category.name.value))
+    put("account", JsonPrimitive(account.name.value))
+    put("occurredOn", JsonPrimitive(occurredOn.toString()))
+}
+
+private fun CashFlowEntry.toToolJson(
+    account: Account?,
+    category: Category?,
+    operation: String,
+): JsonObject = buildJsonObject {
+    put("ok", JsonPrimitive(true))
+    put(operation, JsonPrimitive(true))
+    put("cashFlowEntryId", JsonPrimitive(id.toString()))
+    put("type", JsonPrimitive(type.name))
+    put("amount", moneyJson(money.amount))
+    put("currency", JsonPrimitive(currency.name))
+    put("description", JsonPrimitive(description.value))
+    put("recurrence", JsonPrimitive(recurrence.name))
+    put("startDate", JsonPrimitive(startDate.toString()))
+    endDate?.let { put("endDate", JsonPrimitive(it.toString())) }
+    dayOfMonth?.let { put("dayOfMonth", JsonPrimitive(it)) }
+    account?.let { put("account", JsonPrimitive(it.name.value)) }
+    category?.let { put("category", JsonPrimitive(it.name.value)) }
 }
 
 private fun <T> FinancialResult<T>.requiredValue(): T = when (this) {

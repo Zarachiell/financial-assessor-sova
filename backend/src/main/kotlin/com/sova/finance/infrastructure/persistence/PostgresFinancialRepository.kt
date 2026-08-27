@@ -8,6 +8,8 @@ import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
+import com.sova.finance.domain.CashFlowSettlement
+import com.sova.finance.domain.CashFlowSettlementReceipt
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.Currency
@@ -169,8 +171,9 @@ class PostgresFinancialRepository(
             """
             INSERT INTO transactions
                 (id, household_id, created_by_user_id, account_id, type, amount, currency, description,
-                 category_id, occurred_on, source, source_reference_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))
+                 category_id, occurred_on, source, source_reference_id, created_at, updated_at, updated_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ),
+                    CAST(? AS TIMESTAMPTZ), ?)
             ON CONFLICT DO NOTHING
             """.trimIndent(),
             transaction.id,
@@ -186,6 +189,60 @@ class PostgresFinancialRepository(
             transaction.source.name,
             transaction.sourceReferenceId?.value,
             transaction.createdAt.toString(),
+            transaction.updatedAt.toString(),
+            transaction.updatedByUserId,
+        ) == 1
+    }
+
+    override suspend fun findTransaction(householdId: UUID, transactionId: UUID): Transaction? = query { sql ->
+        sql.fetchOne(
+            "SELECT * FROM transactions WHERE household_id = ? AND id = ? AND deleted_at IS NULL",
+            householdId,
+            transactionId,
+        )?.toTransaction()
+    }
+
+    override suspend fun updateTransaction(transaction: Transaction): Boolean = query { sql ->
+        sql.execute(
+            """
+            UPDATE transactions
+            SET account_id = ?, type = ?, amount = ?, currency = ?, description = ?, category_id = ?,
+                occurred_on = ?, updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?
+            WHERE household_id = ? AND id = ? AND deleted_at IS NULL AND source <> 'CASH_FLOW_SETTLEMENT'
+            """.trimIndent(),
+            transaction.accountId,
+            transaction.type.name,
+            transaction.money.amount,
+            transaction.currency.name,
+            transaction.description.value,
+            transaction.categoryId,
+            transaction.occurredOn,
+            transaction.updatedAt.toString(),
+            transaction.updatedByUserId,
+            transaction.householdId,
+            transaction.id,
+        ) == 1
+    }
+
+    override suspend fun deleteTransaction(
+        householdId: UUID,
+        transactionId: UUID,
+        deletedByUserId: UUID,
+        deletedAt: Instant,
+    ): Boolean = query { sql ->
+        sql.execute(
+            """
+            UPDATE transactions
+            SET deleted_at = CAST(? AS TIMESTAMPTZ), deleted_by_user_id = ?,
+                updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?
+            WHERE household_id = ? AND id = ? AND deleted_at IS NULL AND source <> 'CASH_FLOW_SETTLEMENT'
+            """.trimIndent(),
+            deletedAt.toString(),
+            deletedByUserId,
+            deletedAt.toString(),
+            deletedByUserId,
+            householdId,
+            transactionId,
         ) == 1
     }
 
@@ -193,7 +250,7 @@ class PostgresFinancialRepository(
         householdId: UUID,
         filters: TransactionFilters,
     ): List<Transaction> = query { sql ->
-        val conditions = mutableListOf("household_id = ?")
+        val conditions = mutableListOf("household_id = ?", "deleted_at IS NULL")
         val parameters = mutableListOf<Any>(householdId)
         filters.occurredFrom?.let {
             conditions += "occurred_on >= ?"
@@ -278,7 +335,7 @@ class PostgresFinancialRepository(
 
     override suspend fun findCashFlowEntry(householdId: UUID, entryId: UUID): CashFlowEntry? = query { sql ->
         sql.fetchOne(
-            "SELECT * FROM cash_flow_entries WHERE household_id = ? AND id = ?",
+            "SELECT * FROM cash_flow_entries WHERE household_id = ? AND id = ? AND deleted_at IS NULL",
             householdId,
             entryId,
         )?.toCashFlowEntry()
@@ -287,15 +344,78 @@ class PostgresFinancialRepository(
     override suspend fun deactivateCashFlowEntry(
         householdId: UUID,
         entryId: UUID,
+        updatedByUserId: UUID,
         updatedAt: Instant,
     ): Boolean = query { sql ->
         sql.execute(
             """
             UPDATE cash_flow_entries
-            SET active = FALSE, updated_at = CAST(? AS TIMESTAMPTZ)
-            WHERE household_id = ? AND id = ? AND active
+            SET active = FALSE, updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?
+            WHERE household_id = ? AND id = ? AND active AND deleted_at IS NULL
             """.trimIndent(),
             updatedAt.toString(),
+            updatedByUserId,
+            householdId,
+            entryId,
+        ) == 1
+    }
+
+    override suspend fun updateCashFlowEntry(entry: CashFlowEntry): Boolean = query { sql ->
+        sql.execute(
+            """
+            UPDATE cash_flow_entries
+            SET account_id = ?, category_id = ?, type = ?, amount = ?, currency = ?, description = ?,
+                recurrence = ?, start_date = ?, end_date = ?, day_of_month = ?, active = ?,
+                updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?
+            WHERE household_id = ? AND id = ? AND deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM cash_flow_settlements
+                  WHERE household_id = ? AND cash_flow_entry_id = ?
+              )
+            """.trimIndent(),
+            entry.accountId,
+            entry.categoryId,
+            entry.type.name,
+            entry.money.amount,
+            entry.currency.name,
+            entry.description.value,
+            entry.recurrence.name,
+            entry.startDate,
+            entry.endDate,
+            entry.dayOfMonth,
+            entry.active,
+            entry.updatedAt.toString(),
+            entry.updatedByUserId,
+            entry.householdId,
+            entry.id,
+            entry.householdId,
+            entry.id,
+        ) == 1
+    }
+
+    override suspend fun deleteCashFlowEntry(
+        householdId: UUID,
+        entryId: UUID,
+        deletedByUserId: UUID,
+        deletedAt: Instant,
+    ): Boolean = query { sql ->
+        sql.execute(
+            """
+            UPDATE cash_flow_entries
+            SET deleted_at = CAST(? AS TIMESTAMPTZ), deleted_by_user_id = ?,
+                updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?, active = FALSE
+            WHERE household_id = ? AND id = ? AND deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM cash_flow_settlements
+                  WHERE household_id = ? AND cash_flow_entry_id = ?
+              )
+            """.trimIndent(),
+            deletedAt.toString(),
+            deletedByUserId,
+            deletedAt.toString(),
+            deletedByUserId,
+            householdId,
+            entryId,
             householdId,
             entryId,
         ) == 1
@@ -305,7 +425,7 @@ class PostgresFinancialRepository(
         householdId: UUID,
         filters: CashFlowEntryFilters,
     ): List<CashFlowEntry> = query { sql ->
-        val conditions = mutableListOf("household_id = ?")
+        val conditions = mutableListOf("household_id = ?", "deleted_at IS NULL")
         val parameters = mutableListOf<Any>(householdId)
         filters.type?.let {
             conditions += "type = ?"
@@ -341,6 +461,115 @@ class PostgresFinancialRepository(
             *parameters.toTypedArray(),
         ).map { it.toCashFlowEntry() }
     }
+
+    override suspend fun findCashFlowSettlement(
+        householdId: UUID,
+        entryId: UUID,
+        scheduledOn: LocalDate,
+    ): CashFlowSettlementReceipt? = query { sql ->
+        sql.fetchOne(
+            settlementReceiptSelect(
+                "s.household_id = ? AND s.cash_flow_entry_id = ? AND s.scheduled_on = ?",
+            ),
+            householdId,
+            entryId,
+            scheduledOn,
+        )?.toCashFlowSettlementReceipt()
+    }
+
+    override suspend fun listCashFlowSettlements(
+        householdId: UUID,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<CashFlowSettlementReceipt> = query { sql ->
+        sql.fetch(
+            settlementReceiptSelect(
+                "s.household_id = ? AND s.scheduled_on >= ? AND s.scheduled_on <= ? " +
+                    "ORDER BY s.scheduled_on, s.settled_at, s.id",
+            ),
+            householdId,
+            from,
+            to,
+        ).map { it.toCashFlowSettlementReceipt() }
+    }
+
+    override suspend fun hasCashFlowSettlements(householdId: UUID, entryId: UUID): Boolean = query { sql ->
+        sql.fetchOne(
+            "SELECT 1 FROM cash_flow_settlements WHERE household_id = ? AND cash_flow_entry_id = ? LIMIT 1",
+            householdId,
+            entryId,
+        ) != null
+    }
+
+    override suspend fun insertCashFlowSettlement(receipt: CashFlowSettlementReceipt): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                database.inTransaction { connection ->
+                    val sql = DSL.using(connection, SQLDialect.POSTGRES)
+                    val transaction = receipt.transaction
+                    val entryAvailable = sql.fetchOne(
+                        """
+                        SELECT 1
+                        FROM cash_flow_entries
+                        WHERE household_id = ? AND id = ? AND active AND deleted_at IS NULL
+                        FOR UPDATE
+                        """.trimIndent(),
+                        receipt.settlement.householdId,
+                        receipt.settlement.cashFlowEntryId,
+                    ) != null
+                    if (!entryAvailable) return@inTransaction false
+                    val transactionInserted = sql.execute(
+                        """
+                        INSERT INTO transactions
+                            (id, household_id, created_by_user_id, account_id, type, amount, currency, description,
+                             category_id, occurred_on, source, source_reference_id, created_at, updated_at,
+                             updated_by_user_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ),
+                                CAST(? AS TIMESTAMPTZ), ?)
+                        ON CONFLICT DO NOTHING
+                        """.trimIndent(),
+                        transaction.id,
+                        transaction.householdId,
+                        transaction.createdByUserId,
+                        transaction.accountId,
+                        transaction.type.name,
+                        transaction.money.amount,
+                        transaction.currency.name,
+                        transaction.description.value,
+                        transaction.categoryId,
+                        transaction.occurredOn,
+                        transaction.source.name,
+                        transaction.sourceReferenceId?.value,
+                        transaction.createdAt.toString(),
+                        transaction.updatedAt.toString(),
+                        transaction.updatedByUserId,
+                    ) == 1
+                    if (!transactionInserted) return@inTransaction false
+
+                    val settlement = receipt.settlement
+                    val settlementInserted = sql.execute(
+                        """
+                        INSERT INTO cash_flow_settlements
+                            (id, household_id, cash_flow_entry_id, scheduled_on, transaction_id,
+                             settled_by_user_id, settled_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))
+                        ON CONFLICT DO NOTHING
+                        """.trimIndent(),
+                        settlement.id,
+                        settlement.householdId,
+                        settlement.cashFlowEntryId,
+                        settlement.scheduledOn,
+                        settlement.transactionId,
+                        settlement.settledByUserId,
+                        settlement.settledAt.toString(),
+                    ) == 1
+                    if (!settlementInserted) throw SettlementConflictException()
+                    true
+                }
+            } catch (_: SettlementConflictException) {
+                false
+            }
+        }
 
     private suspend fun <T> query(block: (DSLContext) -> T): T = withContext(Dispatchers.IO) {
         database.withConnection { connection -> block(DSL.using(connection, SQLDialect.POSTGRES)) }
@@ -385,6 +614,10 @@ private fun Record.toTransaction(): Transaction = Transaction(
     source = FinancialSource.valueOf(required("source", String::class.java)),
     sourceReferenceId = get("source_reference_id", String::class.java)?.let(SourceReferenceId::of),
     createdAt = required("created_at", OffsetDateTime::class.java).toInstant(),
+    updatedAt = required("updated_at", OffsetDateTime::class.java).toInstant(),
+    updatedByUserId = get("updated_by_user_id", UUID::class.java),
+    deletedAt = get("deleted_at", OffsetDateTime::class.java)?.toInstant(),
+    deletedByUserId = get("deleted_by_user_id", UUID::class.java),
 )
 
 private fun Record.toCashFlowEntry(): CashFlowEntry = CashFlowEntry(
@@ -406,7 +639,77 @@ private fun Record.toCashFlowEntry(): CashFlowEntry = CashFlowEntry(
     sourceReferenceId = get("source_reference_id", String::class.java)?.let(SourceReferenceId::of),
     createdAt = required("created_at", OffsetDateTime::class.java).toInstant(),
     updatedAt = required("updated_at", OffsetDateTime::class.java).toInstant(),
+    updatedByUserId = get("updated_by_user_id", UUID::class.java),
+    deletedAt = get("deleted_at", OffsetDateTime::class.java)?.toInstant(),
+    deletedByUserId = get("deleted_by_user_id", UUID::class.java),
 )
+
+private fun settlementReceiptSelect(whereClause: String): String =
+    """
+    SELECT
+        s.id AS settlement_id,
+        s.household_id AS settlement_household_id,
+        s.cash_flow_entry_id AS settlement_entry_id,
+        s.scheduled_on AS settlement_scheduled_on,
+        s.transaction_id AS settlement_transaction_id,
+        s.settled_by_user_id AS settlement_user_id,
+        s.settled_at AS settlement_at,
+        t.id AS tx_id,
+        t.household_id AS tx_household_id,
+        t.created_by_user_id AS tx_created_by_user_id,
+        t.account_id AS tx_account_id,
+        t.type AS tx_type,
+        t.amount AS tx_amount,
+        t.currency AS tx_currency,
+        t.description AS tx_description,
+        t.category_id AS tx_category_id,
+        t.occurred_on AS tx_occurred_on,
+        t.source AS tx_source,
+        t.source_reference_id AS tx_source_reference_id,
+        t.created_at AS tx_created_at,
+        t.updated_at AS tx_updated_at,
+        t.updated_by_user_id AS tx_updated_by_user_id,
+        t.deleted_at AS tx_deleted_at,
+        t.deleted_by_user_id AS tx_deleted_by_user_id
+    FROM cash_flow_settlements s
+    JOIN transactions t
+      ON t.household_id = s.household_id AND t.id = s.transaction_id
+    WHERE $whereClause
+    """.trimIndent()
+
+private fun Record.toCashFlowSettlementReceipt(): CashFlowSettlementReceipt {
+    val settlement = CashFlowSettlement(
+        id = required("settlement_id", UUID::class.java),
+        householdId = required("settlement_household_id", UUID::class.java),
+        cashFlowEntryId = required("settlement_entry_id", UUID::class.java),
+        scheduledOn = required("settlement_scheduled_on", LocalDate::class.java),
+        transactionId = required("settlement_transaction_id", UUID::class.java),
+        settledByUserId = required("settlement_user_id", UUID::class.java),
+        settledAt = required("settlement_at", OffsetDateTime::class.java).toInstant(),
+    )
+    val transaction = Transaction(
+        id = required("tx_id", UUID::class.java),
+        householdId = required("tx_household_id", UUID::class.java),
+        createdByUserId = required("tx_created_by_user_id", UUID::class.java),
+        accountId = required("tx_account_id", UUID::class.java),
+        type = FinancialEntryType.valueOf(required("tx_type", String::class.java)),
+        money = Money.of(required("tx_amount", BigDecimal::class.java)),
+        currency = Currency.valueOf(required("tx_currency", String::class.java)),
+        description = FinancialDescription.of(required("tx_description", String::class.java)),
+        categoryId = required("tx_category_id", UUID::class.java),
+        occurredOn = required("tx_occurred_on", LocalDate::class.java),
+        source = FinancialSource.valueOf(required("tx_source", String::class.java)),
+        sourceReferenceId = get("tx_source_reference_id", String::class.java)?.let(SourceReferenceId::of),
+        createdAt = required("tx_created_at", OffsetDateTime::class.java).toInstant(),
+        updatedAt = required("tx_updated_at", OffsetDateTime::class.java).toInstant(),
+        updatedByUserId = get("tx_updated_by_user_id", UUID::class.java),
+        deletedAt = get("tx_deleted_at", OffsetDateTime::class.java)?.toInstant(),
+        deletedByUserId = get("tx_deleted_by_user_id", UUID::class.java),
+    )
+    return CashFlowSettlementReceipt(settlement, transaction)
+}
 
 private fun <T : Any> Record.required(field: String, type: Class<T>): T =
     requireNotNull(get(field, type)) { "Database field $field must not be null" }
+
+private class SettlementConflictException : RuntimeException()

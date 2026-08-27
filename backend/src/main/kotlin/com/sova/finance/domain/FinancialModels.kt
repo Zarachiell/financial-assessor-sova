@@ -85,6 +85,7 @@ enum class FinancialSource {
     WHATSAPP_IMAGE,
     DASHBOARD,
     STATEMENT_IMPORT,
+    CASH_FLOW_SETTLEMENT,
 }
 
 enum class CashFlowRecurrence {
@@ -135,6 +136,10 @@ data class Transaction(
     val source: FinancialSource,
     val sourceReferenceId: SourceReferenceId?,
     val createdAt: Instant,
+    val updatedAt: Instant = createdAt,
+    val updatedByUserId: UUID? = null,
+    val deletedAt: Instant? = null,
+    val deletedByUserId: UUID? = null,
 ) {
     init {
         require(currency == Currency.BRL) { "Only BRL is supported" }
@@ -160,6 +165,9 @@ data class CashFlowEntry(
     val sourceReferenceId: SourceReferenceId?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val updatedByUserId: UUID? = null,
+    val deletedAt: Instant? = null,
+    val deletedByUserId: UUID? = null,
 ) {
     init {
         require(currency == Currency.BRL) { "Only BRL is supported" }
@@ -176,6 +184,21 @@ data class CashFlowEntry(
         }
     }
 }
+
+data class CashFlowSettlement(
+    val id: UUID,
+    val householdId: UUID,
+    val cashFlowEntryId: UUID,
+    val scheduledOn: LocalDate,
+    val transactionId: UUID,
+    val settledByUserId: UUID,
+    val settledAt: Instant,
+)
+
+data class CashFlowSettlementReceipt(
+    val settlement: CashFlowSettlement,
+    val transaction: Transaction,
+)
 
 private fun requiredText(value: String, field: String, maxLength: Int): String {
     val normalized = value.trim()

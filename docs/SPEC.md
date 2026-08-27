@@ -109,6 +109,27 @@ Exemplos:
 - DASHBOARD;
 - STATEMENT_IMPORT.
 
+### RN-10 — Correção de registros
+
+Como usuário autorizado, quero corrigir ou excluir logicamente uma transação cadastrada por engano sem perder a autoria da alteração.
+
+### RN-11 — Múltiplos lançamentos textuais
+
+Uma única mensagem pode originar múltiplas transações, desde que cada item seja estruturalmente validado e possua chave idempotente própria dentro da mensagem.
+
+### RN-12 — Liquidação de fluxo de caixa
+
+Como usuário autorizado, quero consultar ocorrências futuras pendentes e pagas e marcar uma ocorrência como paga ou recebida na data real.
+
+A liquidação deve:
+
+- preservar a previsão original;
+- registrar autor, vencimento e instante da operação;
+- criar atomicamente a transação realizada;
+- afetar o saldo na data real;
+- remover a ocorrência paga das projeções pendentes;
+- não encerrar as demais ocorrências de uma série mensal.
+
 ## 5. Modelo de domínio inicial
 
 ### Household
@@ -120,6 +141,8 @@ Campos mínimos:
 - id;
 - name;
 - created_at.
+
+Transações corrigidas ou excluídas também registram autoria e instante da modificação. Exclusão é lógica. Transações geradas por liquidação possuem origem `CASH_FLOW_SETTLEMENT`.
 
 ### User
 
@@ -197,6 +220,10 @@ Campos principais:
 - end_date;
 - active.
 
+### CashFlowSettlement
+
+Representa a liquidação de uma ocorrência específica de `CashFlowEntry` e aponta para a `Transaction` real criada atomicamente.
+
 ### WhatsappMessage
 
 Mantém rastreabilidade da conversa recebida ou enviada.
@@ -251,11 +278,17 @@ A IA nunca recebe:
 - `get_transactions`
 - `get_category_summary`
 - `get_cash_flow_projection`
+- `get_cash_flow_entries`
 
 ### Escrita
 
 - `create_transaction`
 - `create_cash_flow_entry`
+- `update_transaction`
+- `delete_transaction`
+- `update_cash_flow_entry`
+- `delete_cash_flow_entry`
+- `settle_cash_flow_occurrence`
 
 ## 8. Confiança e confirmação
 

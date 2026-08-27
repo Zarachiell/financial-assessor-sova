@@ -5,6 +5,7 @@ import com.sova.finance.domain.AccountName
 import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
+import com.sova.finance.domain.CashFlowSettlementReceipt
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.FinancialContext
@@ -386,6 +387,135 @@ class FinancialApplicationServiceTest {
         )
     }
 
+    @Test
+    fun `updates and soft deletes transactions with authenticated authorship`() = runBlocking {
+        val repository = InMemoryFinancialRepository(setOf(context))
+        val service = service(repository)
+        val account = service.createAccount(
+            context,
+            CreateAccountCommand(AccountName.of("Checking"), AccountType.CHECKING),
+        ).createdValue()
+        val category = service.createCategory(
+            context,
+            CreateCategoryCommand(CategoryName.of("Food"), FinancialEntryType.EXPENSE),
+        ).createdValue()
+        val created = service.createTransaction(
+            context,
+            transactionCommand(account.id, category.id, "editable"),
+        ).createdValue()
+
+        val updated = service.updateTransaction(
+            context,
+            created.id,
+            UpdateTransactionCommand(
+                accountId = account.id,
+                type = FinancialEntryType.EXPENSE,
+                money = Money.of(BigDecimal("99.90")),
+                description = FinancialDescription.of("Corrected lunch"),
+                categoryId = category.id,
+                occurredOn = LocalDate.parse("2026-08-23"),
+            ),
+        ).value()
+
+        assertEquals(BigDecimal("99.90"), updated.money.amount)
+        assertEquals("Corrected lunch", updated.description.value)
+        assertEquals(userId, updated.updatedByUserId)
+        assertEquals(listOf(updated), service.listTransactions(context).value())
+
+        val deleted = service.deleteTransaction(context, created.id).value()
+        assertEquals(userId, deleted.deletedByUserId)
+        assertTrue(service.listTransactions(context).value().isEmpty())
+        assertEquals(userId, repository.transactions.getValue(created.id).deletedByUserId)
+        assertRejected(FinancialRejection.TRANSACTION_NOT_FOUND, service.deleteTransaction(context, created.id))
+    }
+
+    @Test
+    fun `settles one planned occurrence once and removes it from future projection`() = runBlocking {
+        val repository = InMemoryFinancialRepository(setOf(context))
+        val service = service(repository)
+        val account = service.createAccount(
+            context,
+            CreateAccountCommand(AccountName.of("Checking"), AccountType.CHECKING),
+        ).createdValue()
+        val category = service.createCategory(
+            context,
+            CreateCategoryCommand(CategoryName.of("Housing"), FinancialEntryType.EXPENSE),
+        ).createdValue()
+        val entry = service.createCashFlowEntry(
+            context,
+            cashFlowCommand(
+                type = FinancialEntryType.EXPENSE,
+                amount = "300.00",
+                description = "Rent",
+                accountId = account.id,
+                categoryId = category.id,
+                recurrence = CashFlowRecurrence.MONTHLY,
+                startDate = "2026-08-01",
+                dayOfMonth = 10,
+                reference = "rent",
+            ),
+        ).createdValue()
+
+        val pending = service.getCashFlowOccurrences(
+            context,
+            GetCashFlowOccurrencesQuery(
+                from = LocalDate.parse("2026-09-01"),
+                to = LocalDate.parse("2026-09-30"),
+                status = CashFlowOccurrenceStatus.PENDING,
+            ),
+        ).value()
+        assertEquals(listOf(LocalDate.parse("2026-09-10")), pending.map { it.scheduledOn })
+
+        val command = SettleCashFlowOccurrenceCommand(
+            scheduledOn = LocalDate.parse("2026-09-10"),
+            paidOn = LocalDate.parse("2026-08-24"),
+        )
+        val first = service.settleCashFlowOccurrence(context, entry.id, command).creation()
+        val duplicate = service.settleCashFlowOccurrence(context, entry.id, command).creation()
+
+        assertTrue(first.created)
+        assertFalse(duplicate.created)
+        assertEquals(first.value, duplicate.value)
+        assertEquals(FinancialSource.CASH_FLOW_SETTLEMENT, first.value.transaction.source)
+        assertEquals(LocalDate.parse("2026-08-24"), first.value.transaction.occurredOn)
+        assertEquals(userId, first.value.settlement.settledByUserId)
+        assertEquals(1, repository.transactions.size)
+
+        val paid = service.getCashFlowOccurrences(
+            context,
+            GetCashFlowOccurrencesQuery(
+                from = LocalDate.parse("2026-09-01"),
+                to = LocalDate.parse("2026-09-30"),
+                status = CashFlowOccurrenceStatus.PAID,
+            ),
+        ).value()
+        assertEquals(first.value, paid.single().receipt)
+
+        val projection = service.getCashFlowProjection(
+            context,
+            GetCashFlowProjectionQuery(LocalDate.parse("2026-09-30")),
+        ).value()
+        assertEquals(BigDecimal("-300.00"), projection.currentBalance)
+        assertEquals(BigDecimal("0.00"), projection.expectedExpenses)
+        assertEquals(BigDecimal("-300.00"), projection.projectedBalance)
+        assertRejected(
+            FinancialRejection.CASH_FLOW_ENTRY_HAS_SETTLEMENTS,
+            service.deleteCashFlowEntry(context, entry.id),
+        )
+        assertRejected(
+            FinancialRejection.RECORD_MANAGED_BY_CASH_FLOW,
+            service.deleteTransaction(context, first.value.transaction.id),
+        )
+        assertRejected(
+            FinancialRejection.FUTURE_PAYMENT_DATE,
+            service.settleCashFlowOccurrence(
+                context,
+                entry.id,
+                command.copy(scheduledOn = LocalDate.parse("2026-10-10"), paidOn = LocalDate.parse("2026-08-25")),
+            ),
+        )
+    }
+
     private fun service(repository: InMemoryFinancialRepository): FinancialApplicationService {
         val ids = (1..20).map {
             id("30000000-0000-0000-0000-${it.toString().padStart(12, '0')}")
@@ -441,6 +571,7 @@ private class InMemoryFinancialRepository(
     val categories = linkedMapOf<UUID, Category>()
     val transactions = linkedMapOf<UUID, Transaction>()
     val cashFlowEntries = linkedMapOf<UUID, CashFlowEntry>()
+    val cashFlowSettlements = linkedMapOf<Pair<UUID, LocalDate>, CashFlowSettlementReceipt>()
 
     override suspend fun isActiveMember(context: FinancialContext): Boolean = context in activeContexts
 
@@ -496,9 +627,35 @@ private class InMemoryFinancialRepository(
         return true
     }
 
+    override suspend fun findTransaction(householdId: UUID, transactionId: UUID): Transaction? =
+        transactions[transactionId]?.takeIf { it.householdId == householdId && it.deletedAt == null }
+
+    override suspend fun updateTransaction(transaction: Transaction): Boolean {
+        if (findTransaction(transaction.householdId, transaction.id) == null) return false
+        transactions[transaction.id] = transaction
+        return true
+    }
+
+    override suspend fun deleteTransaction(
+        householdId: UUID,
+        transactionId: UUID,
+        deletedByUserId: UUID,
+        deletedAt: Instant,
+    ): Boolean {
+        val transaction = findTransaction(householdId, transactionId) ?: return false
+        transactions[transactionId] = transaction.copy(
+            updatedAt = deletedAt,
+            updatedByUserId = deletedByUserId,
+            deletedAt = deletedAt,
+            deletedByUserId = deletedByUserId,
+        )
+        return true
+    }
+
     override suspend fun listTransactions(householdId: UUID, filters: TransactionFilters): List<Transaction> =
         transactions.values.asSequence()
             .filter { it.householdId == householdId }
+            .filter { it.deletedAt == null }
             .filter { filters.occurredFrom == null || !it.occurredOn.isBefore(filters.occurredFrom) }
             .filter { filters.occurredTo == null || !it.occurredOn.isAfter(filters.occurredTo) }
             .filter { filters.type == null || it.type == filters.type }
@@ -525,15 +682,46 @@ private class InMemoryFinancialRepository(
     }
 
     override suspend fun findCashFlowEntry(householdId: UUID, entryId: UUID): CashFlowEntry? =
-        cashFlowEntries[entryId]?.takeIf { it.householdId == householdId }
+        cashFlowEntries[entryId]?.takeIf { it.householdId == householdId && it.deletedAt == null }
 
     override suspend fun deactivateCashFlowEntry(
         householdId: UUID,
         entryId: UUID,
+        updatedByUserId: UUID,
         updatedAt: Instant,
     ): Boolean {
         val entry = findCashFlowEntry(householdId, entryId)?.takeIf(CashFlowEntry::active) ?: return false
-        cashFlowEntries[entryId] = entry.copy(active = false, updatedAt = updatedAt)
+        cashFlowEntries[entryId] = entry.copy(
+            active = false,
+            updatedAt = updatedAt,
+            updatedByUserId = updatedByUserId,
+        )
+        return true
+    }
+
+    override suspend fun updateCashFlowEntry(entry: CashFlowEntry): Boolean {
+        if (findCashFlowEntry(entry.householdId, entry.id) == null || hasCashFlowSettlements(entry.householdId, entry.id)) {
+            return false
+        }
+        cashFlowEntries[entry.id] = entry
+        return true
+    }
+
+    override suspend fun deleteCashFlowEntry(
+        householdId: UUID,
+        entryId: UUID,
+        deletedByUserId: UUID,
+        deletedAt: Instant,
+    ): Boolean {
+        val entry = findCashFlowEntry(householdId, entryId) ?: return false
+        if (hasCashFlowSettlements(householdId, entryId)) return false
+        cashFlowEntries[entryId] = entry.copy(
+            active = false,
+            updatedAt = deletedAt,
+            updatedByUserId = deletedByUserId,
+            deletedAt = deletedAt,
+            deletedByUserId = deletedByUserId,
+        )
         return true
     }
 
@@ -542,6 +730,7 @@ private class InMemoryFinancialRepository(
         filters: CashFlowEntryFilters,
     ): List<CashFlowEntry> = cashFlowEntries.values.asSequence()
         .filter { it.householdId == householdId }
+        .filter { it.deletedAt == null }
         .filter { filters.type == null || it.type == filters.type }
         .filter { filters.active == null || it.active == filters.active }
         .filter { filters.from == null || it.endDate == null || !it.endDate.isBefore(filters.from) }
@@ -549,6 +738,36 @@ private class InMemoryFinancialRepository(
         .filter { filters.accountId == null || it.accountId == filters.accountId }
         .sortedBy { it.startDate }
         .toList()
+
+    override suspend fun findCashFlowSettlement(
+        householdId: UUID,
+        entryId: UUID,
+        scheduledOn: LocalDate,
+    ): CashFlowSettlementReceipt? = cashFlowSettlements[entryId to scheduledOn]
+        ?.takeIf { it.settlement.householdId == householdId }
+
+    override suspend fun listCashFlowSettlements(
+        householdId: UUID,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<CashFlowSettlementReceipt> = cashFlowSettlements.values.filter {
+        it.settlement.householdId == householdId &&
+            !it.settlement.scheduledOn.isBefore(from) &&
+            !it.settlement.scheduledOn.isAfter(to)
+    }
+
+    override suspend fun hasCashFlowSettlements(householdId: UUID, entryId: UUID): Boolean =
+        cashFlowSettlements.values.any {
+            it.settlement.householdId == householdId && it.settlement.cashFlowEntryId == entryId
+        }
+
+    override suspend fun insertCashFlowSettlement(receipt: CashFlowSettlementReceipt): Boolean {
+        val key = receipt.settlement.cashFlowEntryId to receipt.settlement.scheduledOn
+        if (cashFlowSettlements.containsKey(key)) return false
+        if (!insertTransaction(receipt.transaction)) return false
+        cashFlowSettlements[key] = receipt
+        return true
+    }
 }
 
 private fun <T> FinancialResult<T>.value(): T = assertIs<FinancialResult.Success<T>>(this).value

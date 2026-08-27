@@ -4,7 +4,7 @@
 
 Ordem atual:
 
-**bootstrap → WhatsApp textual → financial core → local tool calling → Gemini migration → cash flow → financial insights → áudio → imagem → importação → dashboard → self-hosted AI**
+**bootstrap → WhatsApp textual → financial core → local tool calling → Gemini migration → cash flow → financial insights → gestão de registros → áudio → imagem → comprovantes → importação → dashboard → self-hosted AI**
 
 ---
 
@@ -185,6 +185,24 @@ Spec:
 
 ---
 
+## Fase 5.5 — Gestão de registros e liquidação
+Objetivo: corrigir dados e concluir ocorrências planejadas com rastreabilidade antes da Fase 6.
+
+Entregáveis:
+- edição e exclusão lógica de transações
+- edição e exclusão lógica de entradas futuras sem liquidação
+- múltiplos lançamentos financeiros na mesma mensagem
+- detalhamento de ocorrências futuras pendentes e pagas
+- quitação antecipada por ocorrência
+- criação atômica da Transaction realizada
+- autoria de correções, exclusões e pagamentos
+- projeção sem dupla contagem de ocorrências pagas
+
+Spec:
+`docs/phases/05.5-financial-record-management.md`
+
+---
+
 ## Fase 6 — Áudio
 Objetivo: permitir mensagens de voz.
 
@@ -238,6 +256,40 @@ Entregáveis:
 
 Regra:
 imagem produz dados candidatos; o domínio valida e persiste.
+
+---
+
+## Fase 7.5 — Comprovantes de pagamentos planejados
+Objetivo: vincular comprovantes enviados por imagem às ocorrências de fluxo de caixa já liquidadas.
+
+Fluxo esperado:
+
+```text
+imagem + legenda
+  ↓
+identificação segura da ocorrência futura
+  ↓
+confirmação quando houver ambiguidade
+  ↓
+CashFlowSettlement
+  ↓
+comprovante persistido e recuperável
+```
+
+Entregáveis:
+- nova estrutura de banco para comprovantes de liquidação
+- vínculo obrigatório com `CashFlowSettlement` e `Attachment`
+- legenda e metadados de origem
+- armazenamento seguro da mídia fora do PostgreSQL, com referência persistida
+- hash de integridade e tipo/tamanho validados
+- autoria e instante do vínculo
+- consulta posterior do comprovante pelo WhatsApp e futuro dashboard
+- tratamento de múltiplos comprovantes quando necessário
+- prevenção de vínculo entre households
+- testes de autorização, ambiguidade, integridade e recuperação
+
+Regra:
+o comprovante documenta uma liquidação; ele não cria, altera ou quita uma ocorrência sem passar pelo command financeiro correspondente.
 
 ---
 

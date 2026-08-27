@@ -247,6 +247,111 @@ class FinancialToolsIntegrationTest {
             assertTrue(fixture.service.listTransactions(fixture.userA).successValue().isEmpty())
         }
     }
+
+    @Test
+    fun `manages multiple corrections and early cash flow settlement through local tools`() = runBlocking {
+        withFixture { fixture ->
+            val first = fixture.dispatch(
+                "create_transaction",
+                """{"type":"EXPENSE","amount":10,"description":"item um","category":"Outros","occurredOn":"2026-08-25","itemIndex":1}""",
+                fixture.userA,
+                "SM-MULTI",
+            ).json()
+            val second = fixture.dispatch(
+                "create_transaction",
+                """{"type":"EXPENSE","amount":20,"description":"item dois","category":"Outros","occurredOn":"2026-08-25","itemIndex":2}""",
+                fixture.userA,
+                "SM-MULTI",
+            ).json()
+            val firstId = first.getValue("transactionId").jsonPrimitive.content
+            val secondId = second.getValue("transactionId").jsonPrimitive.content
+
+            assertTrue(first.getValue("created").jsonPrimitive.boolean)
+            assertTrue(second.getValue("created").jsonPrimitive.boolean)
+            assertEquals(
+                setOf("SM-MULTI:1", "SM-MULTI:2"),
+                fixture.service.listTransactions(fixture.userA).successValue()
+                    .mapNotNull { it.sourceReferenceId?.value }
+                    .toSet(),
+            )
+
+            val updated = fixture.dispatch(
+                "update_transaction",
+                """{"transactionId":"$firstId","amount":15.50,"description":"item corrigido"}""",
+                fixture.userB,
+                "SM-UPDATE",
+            ).json()
+            val deleted = fixture.dispatch(
+                "delete_transaction",
+                """{"transactionId":"$secondId"}""",
+                fixture.userB,
+                "SM-DELETE",
+            ).json()
+            assertTrue(updated.getValue("updated").jsonPrimitive.boolean)
+            assertEquals(BigDecimal("15.50"), updated.getValue("amount").jsonPrimitive.content.toBigDecimal())
+            assertTrue(deleted.getValue("deleted").jsonPrimitive.boolean)
+            assertEquals(1, fixture.service.listTransactions(fixture.userA).successValue().size)
+
+            val planned = fixture.dispatch(
+                "create_cash_flow_entry",
+                """
+                {
+                  "type":"EXPENSE",
+                  "amount":100,
+                  "description":"conta antecipada",
+                  "recurrence":"ONCE",
+                  "startDate":"2026-08-30",
+                  "category":"Moradia",
+                  "account":"Conta principal"
+                }
+                """.trimIndent(),
+                fixture.userA,
+                "SM-PLANNED",
+            ).json()
+            val entryId = planned.getValue("cashFlowEntryId").jsonPrimitive.content
+            val pending = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-08-25","to":"2026-08-31","status":"PENDING"}""",
+                fixture.userA,
+                "SM-PENDING",
+            ).json()
+            assertEquals(entryId, pending.getValue("entries").jsonArray.single().jsonObject
+                .getValue("cashFlowEntryId").jsonPrimitive.content)
+
+            val settled = fixture.dispatch(
+                "settle_cash_flow_occurrence",
+                """{"cashFlowEntryId":"$entryId","scheduledOn":"2026-08-30","paidOn":"2026-08-25"}""",
+                fixture.userB,
+                "SM-SETTLE",
+            ).json()
+            val duplicate = fixture.dispatch(
+                "settle_cash_flow_occurrence",
+                """{"cashFlowEntryId":"$entryId","scheduledOn":"2026-08-30","paidOn":"2026-08-25"}""",
+                fixture.userB,
+                "SM-SETTLE-RETRY",
+            ).json()
+            assertTrue(settled.getValue("created").jsonPrimitive.boolean)
+            assertFalse(duplicate.getValue("created").jsonPrimitive.boolean)
+            assertEquals("PAID", settled.getValue("status").jsonPrimitive.content)
+
+            val paid = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-08-25","to":"2026-08-31","status":"PAID"}""",
+                fixture.userA,
+                "SM-PAID",
+            ).json()
+            assertEquals("2026-08-25", paid.getValue("entries").jsonArray.single().jsonObject
+                .getValue("paidOn").jsonPrimitive.content)
+            val projection = fixture.dispatch(
+                "get_cash_flow_projection",
+                """{"targetDate":"2026-08-31"}""",
+                fixture.userA,
+                "SM-PROJECTION-AFTER-PAYMENT",
+            ).json()
+            assertEquals(BigDecimal("0.00"), projection.getValue("expectedExpenses").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("-115.50"), projection.getValue("projectedBalance").jsonPrimitive.content.toBigDecimal())
+        }
+    }
 }
 
 private suspend fun withFixture(block: suspend (FinancialToolFixture) -> Unit) {
