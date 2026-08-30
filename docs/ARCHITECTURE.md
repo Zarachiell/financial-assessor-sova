@@ -100,7 +100,9 @@ Transaction (data real)
 CashFlowSettlement (vencimento, autor, instante)
 ```
 
-A Transaction e o CashFlowSettlement são persistidos na mesma transação PostgreSQL. A constraint por `(household_id, cash_flow_entry_id, scheduled_on)` impede quitação duplicada. Projeções ignoram ocorrências liquidadas; o saldo considera a Transaction real. Comprovantes de mídia serão vinculados ao settlement somente após a Fase 7 de imagens.
+A Transaction e o CashFlowSettlement são persistidos na mesma transação PostgreSQL. A constraint por `(household_id, cash_flow_entry_id, scheduled_on)` impede quitação duplicada. Projeções ignoram ocorrências liquidadas; o saldo considera a Transaction real.
+
+Após a análise de imagens, comprovantes são vinculados ao settlement por `SettlementReceipt`. O binário fica fora do PostgreSQL atrás da port `MediaStorage`; o banco mantém metadados, SHA-256 e relações compostas por household. A recuperação utiliza URL temporária assinada e nova verificação de integridade.
 
 ## Local Tool Calling
 

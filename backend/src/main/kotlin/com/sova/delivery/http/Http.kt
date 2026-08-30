@@ -28,6 +28,7 @@ import java.util.UUID
 fun Application.configureHttp(
     database: DatabaseHealth,
     whatsapp: WhatsappHttpDependencies? = null,
+    receiptMedia: ReceiptMediaHttpDependencies? = null,
 ) {
     install(CallId) {
         retrieveFromHeader(HttpHeaders.XRequestId)
@@ -80,6 +81,7 @@ fun Application.configureHttp(
         }
 
         whatsapp?.let(::whatsappRoutes)
+        receiptMedia?.let(::receiptMediaRoutes)
     }
 }
 

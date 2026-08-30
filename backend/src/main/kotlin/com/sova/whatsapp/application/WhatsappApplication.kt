@@ -102,6 +102,7 @@ interface WhatsappRepository {
         message: StoredWhatsappMessage,
         attachments: List<StoredWhatsappAttachment> = emptyList(),
         audioJobAttachmentId: UUID? = null,
+        imageJobAttachmentId: UUID? = null,
     ): Boolean
 
     suspend fun saveOutbound(message: StoredWhatsappMessage)
@@ -117,11 +118,13 @@ data class WhatsappConversationContext(
     val inboundMessageSid: String,
     val text: String,
     val origin: WhatsappMessageOrigin = WhatsappMessageOrigin.TEXT,
+    val attachmentId: UUID? = null,
 )
 
 enum class WhatsappMessageOrigin {
     TEXT,
     AUDIO,
+    IMAGE,
 }
 
 fun interface WhatsappTextConversation {
@@ -179,16 +182,22 @@ class HandleWhatsappMessage(
         }
         val firstAudio = attachments.firstOrNull { it.mediaType == WhatsappMediaType.AUDIO }
         val supportedAudio = firstAudio?.takeIf { it.contentType in SUPPORTED_AUDIO_CONTENT_TYPES }
+        val firstImage = attachments.firstOrNull { it.mediaType == WhatsappMediaType.IMAGE }
+        val supportedImage = firstImage?.takeIf { it.contentType in SUPPORTED_IMAGE_CONTENT_TYPES }
         val inserted = repository.saveInboundIfNew(
             message = storedMessage,
             attachments = attachments,
             audioJobAttachmentId = supportedAudio?.id,
+            imageJobAttachmentId = supportedImage?.takeIf { supportedAudio == null }?.id,
         )
         if (!inserted) {
             return WhatsappHandlingResult.Duplicate(user.userId, user.householdId)
         }
         if (supportedAudio != null) {
             return WhatsappHandlingResult.Queued(user.userId, user.householdId, supportedAudio.id)
+        }
+        if (supportedImage != null) {
+            return WhatsappHandlingResult.Queued(user.userId, user.householdId, supportedImage.id)
         }
         if (attachments.isNotEmpty()) {
             val sendResult = sendAndPersist(user.userId, message.from, UNSUPPORTED_MEDIA_RESPONSE)
@@ -262,7 +271,7 @@ class HandleWhatsappMessage(
         const val NEUTRAL_RESPONSE = "Mensagem recebida. Nesta fase, envie \"ping\" para testar."
         const val SAFE_FAILURE_RESPONSE = "Não consegui processar sua mensagem agora. Tente novamente em instantes."
         const val UNSUPPORTED_MEDIA_RESPONSE =
-            "Ainda não consigo processar esse tipo de mídia. Nesta fase, envie texto ou áudio."
+            "Não consigo processar esse formato. Envie texto, áudio ou imagem em JPEG, PNG ou WebP."
         val SUPPORTED_AUDIO_CONTENT_TYPES = setOf(
             "audio/ogg",
             "audio/mpeg",
@@ -271,6 +280,11 @@ class HandleWhatsappMessage(
             "audio/aiff",
             "audio/aac",
             "audio/flac",
+        )
+        val SUPPORTED_IMAGE_CONTENT_TYPES = setOf(
+            "image/jpeg",
+            "image/png",
+            "image/webp",
         )
         val LOGGER = LoggerFactory.getLogger("com.sova.whatsapp.conversation")
     }

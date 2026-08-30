@@ -1,5 +1,9 @@
 package com.sova.audio.application
 
+import com.sova.media.application.MediaDownloadException
+import com.sova.media.application.MediaDownloadFailure
+import com.sova.media.application.DownloadedMedia
+import com.sova.media.application.WhatsappMediaDownloader
 import com.sova.whatsapp.application.HouseholdProvisioning
 import com.sova.whatsapp.application.SendMessageResult
 import com.sova.whatsapp.application.StoredWhatsappAttachment
@@ -106,7 +110,7 @@ class ProcessAudioMessageTest {
             whatsappRepository = RecordingWhatsappRepository(),
             sender = sender,
             downloader = WhatsappMediaDownloader {
-                throw MediaDownloadException(AudioFailure.DOWNLOAD_UNAVAILABLE)
+                throw MediaDownloadException(MediaDownloadFailure.UNAVAILABLE)
             },
         )
 
@@ -194,6 +198,7 @@ private class RecordingWhatsappRepository : WhatsappRepository {
         message: StoredWhatsappMessage,
         attachments: List<StoredWhatsappAttachment>,
         audioJobAttachmentId: UUID?,
+        imageJobAttachmentId: UUID?,
     ): Boolean = true
 
     override suspend fun saveOutbound(message: StoredWhatsappMessage) {

@@ -130,6 +130,41 @@ class AppConfigTest {
     }
 
     @Test
+    fun `uses centralized Gemini image limits confidence and storage`() {
+        val defaults = AppConfig.fromEnvironment(requiredEnvironment).image
+        assertEquals("gemini-3.5-flash-lite", defaults.model)
+        assertEquals(10L * 1024 * 1024, defaults.maxImageBytes)
+        assertEquals(3, defaults.maxAttempts)
+        assertEquals("0.85".toBigDecimal(), defaults.minimumAutoConfidence)
+        assertEquals("/var/lib/sova/attachments", defaults.storagePath)
+
+        val configured = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "GEMINI_IMAGE_MODEL" to "gemini-image-test",
+                "SOVA_MAX_IMAGE_BYTES" to "2048",
+                "SOVA_IMAGE_MAX_ATTEMPTS" to "2",
+                "SOVA_IMAGE_MIN_CONFIDENCE" to "0.90",
+                "SOVA_MEDIA_STORAGE_PATH" to "build/media-test",
+            ),
+        ).image
+        assertEquals("gemini-image-test", configured.model)
+        assertEquals(2048, configured.maxImageBytes)
+        assertEquals(2, configured.maxAttempts)
+        assertEquals("0.90".toBigDecimal(), configured.minimumAutoConfidence)
+        assertEquals("build/media-test", configured.storagePath)
+    }
+
+    @Test
+    fun `rejects malformed or out of range image confidence`() {
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_IMAGE_MIN_CONFIDENCE" to "high"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_IMAGE_MIN_CONFIDENCE" to "1.1"))
+        }
+    }
+
+    @Test
     fun `rejects unsupported AI provider`() {
         assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(requiredEnvironment + ("AI_PROVIDER" to "remote-mcp"))

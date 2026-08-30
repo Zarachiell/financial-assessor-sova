@@ -92,7 +92,7 @@ class HandleWhatsappTextMessageTest {
     }
 
     @Test
-    fun `unsupported media is persisted and receives controlled response`() = runBlocking {
+    fun `supported image and caption are persisted and queued without synchronous response`() = runBlocking {
         val repository = InMemoryWhatsappRepository(userA)
         val sender = RecordingWhatsappSender()
         val handler = HandleWhatsappMessage(repository, senderAddress, sender, clock)
@@ -103,9 +103,11 @@ class HandleWhatsappTextMessageTest {
             ),
         )
 
-        assertIs<WhatsappHandlingResult.Processed>(result)
+        val queued = assertIs<WhatsappHandlingResult.Queued>(result)
+        assertEquals(queued.attachmentId, repository.queuedImageAttachmentId)
         assertEquals(WhatsappMediaType.IMAGE, repository.attachments.single().mediaType)
-        assertTrue(sender.sent.single().second.contains("texto ou áudio"))
+        assertEquals("legenda", repository.inbound.getValue("SM-IMAGE").body)
+        assertTrue(sender.sent.isEmpty())
     }
 
     @Test
@@ -197,6 +199,7 @@ private class InMemoryWhatsappRepository(
     val outbound = mutableListOf<StoredWhatsappMessage>()
     val attachments = mutableListOf<StoredWhatsappAttachment>()
     var queuedAudioAttachmentId: UUID? = null
+    var queuedImageAttachmentId: UUID? = null
 
     override suspend fun provision(household: HouseholdProvisioning) = Unit
 
@@ -206,10 +209,12 @@ private class InMemoryWhatsappRepository(
         message: StoredWhatsappMessage,
         attachments: List<StoredWhatsappAttachment>,
         audioJobAttachmentId: UUID?,
+        imageJobAttachmentId: UUID?,
     ): Boolean {
         if (inbound.putIfAbsent(message.messageSid, message) != null) return false
         this.attachments += attachments
         queuedAudioAttachmentId = audioJobAttachmentId
+        queuedImageAttachmentId = imageJobAttachmentId
         return true
     }
 

@@ -241,6 +241,8 @@ Regra:
 ---
 
 ## Fase 7 — Imagens
+Estado: concluída em 30/08/2026. Detalhes em `docs/phases/07-images.md`.
+
 Objetivo: interpretar comprovantes e recibos.
 
 Entregáveis:
@@ -262,6 +264,8 @@ imagem produz dados candidatos; o domínio valida e persiste.
 ---
 
 ## Fase 7.5 — Comprovantes de pagamentos planejados
+Estado: concluída em 30/08/2026. Detalhes em `docs/phases/07.5-settlement-receipts.md`.
+
 Objetivo: vincular comprovantes enviados por imagem às ocorrências de fluxo de caixa já liquidadas.
 
 Fluxo esperado:

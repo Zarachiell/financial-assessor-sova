@@ -1,7 +1,7 @@
 package com.sova.whatsapp.infrastructure.twilio
 
-import com.sova.audio.application.AudioFailure
-import com.sova.audio.application.MediaDownloadException
+import com.sova.media.application.MediaDownloadException
+import com.sova.media.application.MediaDownloadFailure
 import com.sova.shared.config.TwilioConfig
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
@@ -28,7 +28,7 @@ class TwilioWhatsappMediaDownloaderTest {
 
             assertContentEquals(byteArrayOf(1, 2, 3, 4), media.bytes)
             assertEquals("audio/ogg", media.contentType)
-            assertEquals("audio.ogg", media.filename)
+            assertEquals("media.ogg", media.filename)
             val request = server.takeRequest()
             assertEquals("GET", request.method)
             assertTrue(request.getHeader("Authorization").orEmpty().startsWith("Basic "))
@@ -50,7 +50,7 @@ class TwilioWhatsappMediaDownloaderTest {
                 downloader(server, maxBytes = 5).use { it.download(server.url("/media/large").toString()) }
             }
 
-            assertEquals(AudioFailure.FILE_TOO_LARGE, failure.failure)
+            assertEquals(MediaDownloadFailure.FILE_TOO_LARGE, failure.failure)
         }
     }
 
@@ -63,7 +63,7 @@ class TwilioWhatsappMediaDownloaderTest {
                 downloader(server, maxBytes = 10).use { it.download(server.url("/media/unavailable").toString()) }
             }
 
-            assertEquals(AudioFailure.DOWNLOAD_UNAVAILABLE, failure.failure)
+            assertEquals(MediaDownloadFailure.UNAVAILABLE, failure.failure)
             assertTrue(failure.failure.retryable)
         }
     }

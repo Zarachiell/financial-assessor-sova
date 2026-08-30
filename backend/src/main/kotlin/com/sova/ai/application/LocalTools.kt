@@ -14,11 +14,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import kotlin.time.TimeSource
+import java.util.UUID
 
 data class ToolExecutionContext(
     val financialContext: FinancialContext,
     val inboundMessageSid: String,
     val source: FinancialSource = FinancialSource.WHATSAPP_TEXT,
+    val attachmentId: UUID? = null,
 )
 
 interface LocalTool {

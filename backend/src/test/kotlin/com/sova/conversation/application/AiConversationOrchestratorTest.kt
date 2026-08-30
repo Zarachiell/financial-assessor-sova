@@ -18,6 +18,7 @@ import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.ToolExecutionContext
 import com.sova.ai.application.ToolRejectedException
 import com.sova.whatsapp.application.WhatsappConversationContext
+import com.sova.whatsapp.application.WhatsappMessageOrigin
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -118,6 +119,36 @@ class AiConversationOrchestratorTest {
         val toolMessages = provider.requests.last().messages.filter { it.role == AiMessageRole.TOOL }
         assertEquals(listOf("call-balance", "call-expenses"), toolMessages.map { it.toolCallId })
         assertTrue(provider.requests.last().tools.isEmpty())
+    }
+
+    @Test
+    fun `requires receipt linkage after settling an occurrence from an image`() = runBlocking {
+        val settlement = RecordingTool("settle_cash_flow_occurrence")
+        val receipt = RecordingTool("link_settlement_receipt")
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-settle", settlement.definition.name, "{}")),
+                answer("A conta foi paga."),
+                toolCalls(AiToolCall("call-receipt", receipt.definition.name, "{}")),
+                answer("Conta paga e comprovante vinculado."),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(settlement, receipt)) { emptyList() }
+        val attachmentId = UUID.randomUUID()
+
+        val response = orchestrator.respond(
+            context("Este comprovante é da conta de energia").copy(
+                origin = WhatsappMessageOrigin.IMAGE,
+                attachmentId = attachmentId,
+            ),
+        )
+
+        assertTrue(response.contains("comprovante vinculado"))
+        assertEquals(1, settlement.executions.size)
+        assertEquals(1, receipt.executions.size)
+        assertEquals(attachmentId, receipt.executions.single().attachmentId)
+        assertEquals(listOf("link_settlement_receipt"), provider.requests[1].tools.map { it.name })
+        assertEquals(listOf("link_settlement_receipt"), provider.requests[2].tools.map { it.name })
     }
 
     @Test

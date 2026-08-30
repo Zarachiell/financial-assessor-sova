@@ -1,6 +1,7 @@
 package com.sova.shared.config
 
 import com.sova.whatsapp.domain.WhatsappAddress
+import java.math.BigDecimal
 
 data class AppConfig(
     val http: HttpConfig,
@@ -10,6 +11,7 @@ data class AppConfig(
     val ai: AiConfig,
     val cashFlow: CashFlowConfig,
     val audio: AudioConfig,
+    val image: ImageConfig,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig =
@@ -57,12 +59,36 @@ data class AppConfig(
                     maxAttempts = environment.optionalPositiveInt("SOVA_AUDIO_MAX_ATTEMPTS")
                         ?: DEFAULT_AUDIO_MAX_ATTEMPTS,
                 ),
+                image = ImageConfig(
+                    model = environment["GEMINI_IMAGE_MODEL"]?.takeIf(String::isNotBlank)
+                        ?: environment["GEMINI_MODEL"]?.takeIf(String::isNotBlank)
+                        ?: DEFAULT_GEMINI_MODEL,
+                    maxImageBytes = environment.optionalPositiveLong("SOVA_MAX_IMAGE_BYTES")
+                        ?: DEFAULT_MAX_IMAGE_BYTES,
+                    maxAttempts = environment.optionalPositiveInt("SOVA_IMAGE_MAX_ATTEMPTS")
+                        ?: DEFAULT_IMAGE_MAX_ATTEMPTS,
+                    minimumAutoConfidence = environment["SOVA_IMAGE_MIN_CONFIDENCE"]?.let { raw ->
+                        raw.toBigDecimalOrNull()
+                            ?: throw IllegalArgumentException("SOVA_IMAGE_MIN_CONFIDENCE must be a decimal number")
+                    } ?: DEFAULT_IMAGE_MIN_CONFIDENCE,
+                    storagePath = environment["SOVA_MEDIA_STORAGE_PATH"]?.takeIf(String::isNotBlank)
+                        ?: DEFAULT_MEDIA_STORAGE_PATH,
+                    publicBaseUrl = environment["SOVA_PUBLIC_BASE_URL"]?.takeIf(String::isNotBlank)
+                        ?: environment["SOVA_ADDRESS"]?.takeIf(String::isNotBlank)
+                        ?: "http://localhost",
+                    signingSecret = environment["SOVA_MEDIA_SIGNING_KEY"]?.takeIf(String::isNotBlank)
+                        ?: environment.required("TWILIO_AUTH_TOKEN"),
+                ),
             )
 
         private const val DEFAULT_MAX_PROJECTION_MONTHS = 24
         private const val DEFAULT_MAX_AUDIO_BYTES = 16L * 1024 * 1024
         private const val DEFAULT_MAX_AUDIO_DURATION_MINUTES = 5
         private const val DEFAULT_AUDIO_MAX_ATTEMPTS = 3
+        private const val DEFAULT_MAX_IMAGE_BYTES = 10L * 1024 * 1024
+        private const val DEFAULT_IMAGE_MAX_ATTEMPTS = 3
+        private val DEFAULT_IMAGE_MIN_CONFIDENCE = BigDecimal("0.85")
+        private const val DEFAULT_MEDIA_STORAGE_PATH = "/var/lib/sova/attachments"
     }
 }
 
@@ -142,6 +168,37 @@ data class AudioConfig(
         const val MAX_PROVIDER_UPLOAD_BYTES = 25L * 1024 * 1024
         const val MAX_AUDIO_DURATION_MINUTES = 30
         const val MAX_AUDIO_ATTEMPTS = 10
+    }
+}
+
+data class ImageConfig(
+    val model: String,
+    val maxImageBytes: Long,
+    val maxAttempts: Int,
+    val minimumAutoConfidence: BigDecimal,
+    val storagePath: String,
+    val publicBaseUrl: String,
+    val signingSecret: String,
+) {
+    init {
+        require(model.isNotBlank()) { "Gemini image model must not be blank" }
+        require(maxImageBytes in 1..MAX_PROVIDER_UPLOAD_BYTES) {
+            "Maximum image size must be between 1 byte and $MAX_PROVIDER_UPLOAD_BYTES bytes"
+        }
+        require(maxAttempts in 1..MAX_IMAGE_ATTEMPTS) {
+            "Maximum image attempts must be between 1 and $MAX_IMAGE_ATTEMPTS"
+        }
+        require(minimumAutoConfidence in BigDecimal.ZERO..BigDecimal.ONE) {
+            "Minimum image confidence must be between zero and one"
+        }
+        require(storagePath.isNotBlank()) { "Media storage path must not be blank" }
+        require(publicBaseUrl.isNotBlank()) { "Media public base URL must not be blank" }
+        require(signingSecret.isNotBlank()) { "Media signing key must not be blank" }
+    }
+
+    private companion object {
+        const val MAX_PROVIDER_UPLOAD_BYTES = 25L * 1024 * 1024
+        const val MAX_IMAGE_ATTEMPTS = 10
     }
 }
 

@@ -1,9 +1,9 @@
 package com.sova.whatsapp.infrastructure.twilio
 
-import com.sova.audio.application.AudioFailure
-import com.sova.audio.application.DownloadedMedia
-import com.sova.audio.application.MediaDownloadException
-import com.sova.audio.application.WhatsappMediaDownloader
+import com.sova.media.application.DownloadedMedia
+import com.sova.media.application.MediaDownloadException
+import com.sova.media.application.MediaDownloadFailure
+import com.sova.media.application.WhatsappMediaDownloader
 import com.sova.shared.config.TwilioConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +33,7 @@ class TwilioWhatsappMediaDownloader(
     override suspend fun download(mediaUrl: String): DownloadedMedia = withContext(Dispatchers.IO) {
         val url = mediaUrl.toHttpUrlOrNull()
             ?.takeIf(urlPolicy)
-            ?: throw MediaDownloadException(AudioFailure.DOWNLOAD_REJECTED)
+            ?: throw MediaDownloadException(MediaDownloadFailure.REJECTED)
         val request = Request.Builder()
             .url(url)
             .header("Authorization", authorization)
@@ -43,20 +43,20 @@ class TwilioWhatsappMediaDownloader(
             client.newCall(request).execute().use { response ->
                 when {
                     response.code == 401 || response.code == 403 ->
-                        throw MediaDownloadException(AudioFailure.DOWNLOAD_AUTHENTICATION)
+                        throw MediaDownloadException(MediaDownloadFailure.AUTHENTICATION)
                     response.code == 429 ->
-                        throw MediaDownloadException(AudioFailure.DOWNLOAD_RATE_LIMITED)
+                        throw MediaDownloadException(MediaDownloadFailure.RATE_LIMITED)
                     response.code >= 500 ->
-                        throw MediaDownloadException(AudioFailure.DOWNLOAD_UNAVAILABLE)
+                        throw MediaDownloadException(MediaDownloadFailure.UNAVAILABLE)
                     !response.isSuccessful ->
-                        throw MediaDownloadException(AudioFailure.DOWNLOAD_REJECTED)
+                        throw MediaDownloadException(MediaDownloadFailure.REJECTED)
                 }
-                val body = response.body ?: throw MediaDownloadException(AudioFailure.DOWNLOAD_REJECTED)
+                val body = response.body ?: throw MediaDownloadException(MediaDownloadFailure.REJECTED)
                 if (body.contentLength() > maxBytes) {
-                    throw MediaDownloadException(AudioFailure.FILE_TOO_LARGE)
+                    throw MediaDownloadException(MediaDownloadFailure.FILE_TOO_LARGE)
                 }
                 val contentType = body.contentType()?.toString()?.substringBefore(';')?.lowercase()
-                    ?: throw MediaDownloadException(AudioFailure.DOWNLOAD_REJECTED)
+                    ?: throw MediaDownloadException(MediaDownloadFailure.REJECTED)
                 val output = ByteArrayOutputStream(minOf(maxBytes, INITIAL_BUFFER_BYTES.toLong()).toInt())
                 val buffer = ByteArray(READ_BUFFER_BYTES)
                 var total = 0L
@@ -65,14 +65,14 @@ class TwilioWhatsappMediaDownloader(
                         val read = input.read(buffer)
                         if (read < 0) break
                         total += read
-                        if (total > maxBytes) throw MediaDownloadException(AudioFailure.FILE_TOO_LARGE)
+                        if (total > maxBytes) throw MediaDownloadException(MediaDownloadFailure.FILE_TOO_LARGE)
                         output.write(buffer, 0, read)
                     }
                 }
                 DownloadedMedia(
                     bytes = output.toByteArray(),
                     contentType = contentType,
-                    filename = "audio.${contentType.fileExtension()}",
+                    filename = "media.${contentType.fileExtension()}",
                 )
             }
         } catch (cause: CancellationException) {
@@ -80,11 +80,11 @@ class TwilioWhatsappMediaDownloader(
         } catch (cause: MediaDownloadException) {
             throw cause
         } catch (cause: SocketTimeoutException) {
-            throw MediaDownloadException(AudioFailure.DOWNLOAD_TIMEOUT, cause)
+            throw MediaDownloadException(MediaDownloadFailure.TIMEOUT, cause)
         } catch (cause: IOException) {
-            throw MediaDownloadException(AudioFailure.DOWNLOAD_UNAVAILABLE, cause)
+            throw MediaDownloadException(MediaDownloadFailure.UNAVAILABLE, cause)
         } catch (cause: Exception) {
-            throw MediaDownloadException(AudioFailure.DOWNLOAD_REJECTED, cause)
+            throw MediaDownloadException(MediaDownloadFailure.REJECTED, cause)
         }
     }
 
@@ -116,5 +116,8 @@ private fun String.fileExtension(): String = when (this) {
     "audio/aiff" -> "aiff"
     "audio/aac" -> "aac"
     "audio/flac" -> "flac"
+    "image/jpeg" -> "jpg"
+    "image/png" -> "png"
+    "image/webp" -> "webp"
     else -> "bin"
 }

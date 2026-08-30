@@ -98,13 +98,16 @@ class AiConversationOrchestrator(
             source = when (context.origin) {
                 WhatsappMessageOrigin.TEXT -> FinancialSource.WHATSAPP_TEXT
                 WhatsappMessageOrigin.AUDIO -> FinancialSource.WHATSAPP_AUDIO
+                WhatsappMessageOrigin.IMAGE -> FinancialSource.WHATSAPP_IMAGE
             },
+            attachmentId = context.attachmentId,
         )
         var completedToolRounds = 0
         var availableTools = registry.definitions
         var completedBatch: List<CompletedToolExecution> = emptyList()
         var finalizationRetryUsed = false
         var writeCompletionRetryUsed = false
+        var receiptCompletionRetryUsed = false
         val expectedWriteCount = expectedWriteCount(context.text)
         val completedReadCalls = mutableSetOf<Pair<String, String>>()
         while (true) {
@@ -135,6 +138,20 @@ class AiConversationOrchestrator(
                         continue
                     }
                     return INCOMPLETE_WRITE_FALLBACK.format(expectedWriteCount, completedWriteCount)
+                }
+                val imageSettlementCompleted = context.attachmentId != null &&
+                    completedBatch.any { it.name == "settle_cash_flow_occurrence" && it.result.successful }
+                val imageReceiptLinked = completedBatch.any {
+                    it.name == "link_settlement_receipt" && it.result.successful
+                }
+                if (imageSettlementCompleted && !imageReceiptLinked) {
+                    if (!receiptCompletionRetryUsed) {
+                        receiptCompletionRetryUsed = true
+                        availableTools = registry.definitions.filter { it.name == "link_settlement_receipt" }
+                        messages += AiMessage(AiMessageRole.USER, IMAGE_RECEIPT_COMPLETION_PROMPT)
+                        continue
+                    }
+                    return IMAGE_RECEIPT_INCOMPLETE_FALLBACK
                 }
                 if (!isGroundedAnalyticResponse(finalText, completedBatch, context)) {
                     return UNGROUNDED_ANALYTIC_FALLBACK
@@ -184,6 +201,9 @@ class AiConversationOrchestrator(
             val writePersisted = executedBatch.any { execution ->
                 execution.name in PERSISTED_WRITE_TOOLS && execution.result.successful
             }
+            val imageSettlementPersisted = context.attachmentId != null && executedBatch.any { execution ->
+                execution.name == "settle_cash_flow_occurrence" && execution.result.successful
+            }
             response.toolCalls.zip(executedBatch)
                 .filter { (_, execution) -> execution.result.successful && execution.name !in PERSISTED_WRITE_TOOLS }
                 .forEach { (call, _) -> completedReadCalls += call.name to call.arguments }
@@ -191,6 +211,7 @@ class AiConversationOrchestrator(
                 execution.name in RECORD_LOOKUP_TOOLS && execution.result.successful
             }
             availableTools = when {
+                imageSettlementPersisted -> registry.definitions.filter { it.name == "link_settlement_receipt" }
                 writePersisted -> emptyList()
                 !batchSucceeded || recordLookupCompleted -> registry.definitions
                 else -> emptyList()
@@ -464,8 +485,14 @@ class AiConversationOrchestrator(
             "update_cash_flow_entry",
             "delete_cash_flow_entry",
             "settle_cash_flow_occurrence",
+            "link_settlement_receipt",
         )
-        val RECORD_LOOKUP_TOOLS = setOf("get_transactions", "get_cash_flow_entries")
+        val RECORD_LOOKUP_TOOLS = setOf(
+            "get_transactions",
+            "get_cash_flow_entries",
+            "get_image_candidates",
+            "get_settlement_receipts",
+        )
         val ANALYTIC_TOOLS = setOf(
             "get_financial_snapshot",
             "compare_periods",
@@ -492,6 +519,12 @@ class AiConversationOrchestrator(
         const val INCOMPLETE_WRITE_FALLBACK =
             "Não consegui concluir o cadastro completo com segurança: %d itens foram solicitados e apenas %d " +
                 "operações foram confirmadas. Nenhum item adicional será declarado como salvo."
+        const val IMAGE_RECEIPT_COMPLETION_PROMPT =
+            "A conta da imagem já foi liquidada. Vincule agora a imagem atual ao settlementId retornado usando " +
+                "link_settlement_receipt; não crie outra transação."
+        const val IMAGE_RECEIPT_INCOMPLETE_FALLBACK =
+            "A conta foi liquidada, mas não consegui vincular o comprovante. Não pague novamente; peça para eu " +
+                "consultar a liquidação e anexar a imagem pendente."
         const val UNGROUNDED_ANALYTIC_FALLBACK =
             "Não consegui validar todos os valores da análise com segurança. Reformule a pergunta para eu consultar " +
                 "os dados novamente."

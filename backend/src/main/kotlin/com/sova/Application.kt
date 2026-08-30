@@ -3,6 +3,7 @@ package com.sova
 import com.sova.ai.application.LocalToolDispatcher
 import com.sova.ai.application.LocalToolRegistry
 import com.sova.ai.application.financialLocalTools
+import com.sova.ai.application.receiptLocalTools
 import com.sova.ai.application.AiProvider
 import com.sova.ai.infrastructure.gemini.GeminiAiProvider
 import com.sova.audio.application.AudioProcessingConfig
@@ -14,13 +15,27 @@ import com.sova.conversation.application.AiConversationOrchestrator
 import com.sova.conversation.application.FamilyRole
 import com.sova.conversation.infrastructure.persistence.PostgresConversationHistory
 import com.sova.delivery.http.WhatsappHttpDependencies
+import com.sova.delivery.http.ReceiptMediaHttpDependencies
 import com.sova.delivery.http.configureHttp
 import com.sova.finance.application.DefaultFinancialCatalogProvisioner
+import com.sova.finance.application.DefaultFinancialCatalog
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.domain.FinancialContext
 import com.sova.finance.infrastructure.persistence.PostgresFinancialRepository
 import com.sova.finance.insights.application.FinancialInsightsApplicationService
 import com.sova.finance.insights.infrastructure.persistence.PostgresFinancialInsightsRepository
+import com.sova.image.application.ImageProcessingConfig
+import com.sova.image.application.ImageProcessingWorker
+import com.sova.image.application.ImageCandidateService
+import com.sova.image.application.ProcessImageMessage
+import com.sova.image.infrastructure.gemini.GeminiImageAnalysisProvider
+import com.sova.image.infrastructure.persistence.PostgresImageProcessingRepository
+import com.sova.image.infrastructure.persistence.PostgresImageCandidateRepository
+import com.sova.media.infrastructure.LocalMediaStorage
+import com.sova.receipt.application.ReceiptAccessLinkSigner
+import com.sova.receipt.application.ReceiptMediaAccess
+import com.sova.receipt.application.SettlementReceiptService
+import com.sova.receipt.infrastructure.persistence.PostgresSettlementReceiptRepository
 import com.sova.shared.config.AppConfig
 import com.sova.shared.config.AiConfig
 import com.sova.shared.infrastructure.database.PostgresDatabase
@@ -78,7 +93,18 @@ fun main() {
 
     val senderAddress = WhatsappAddress(config.twilio.whatsappSender)
     createAiProvider(config.ai).use { provider ->
-        val toolRegistry = LocalToolRegistry(financialLocalTools(financialService, financialInsightsService))
+        val imageCandidateService = ImageCandidateService(PostgresImageCandidateRepository(database))
+        val mediaStorage = LocalMediaStorage(Path.of(config.image.storagePath))
+        val settlementReceiptRepository = PostgresSettlementReceiptRepository(database)
+        val settlementReceiptService = SettlementReceiptService(settlementReceiptRepository)
+        val receiptLinkSigner = ReceiptAccessLinkSigner(
+            config.image.publicBaseUrl,
+            config.image.signingSecret,
+        )
+        val toolRegistry = LocalToolRegistry(
+            financialLocalTools(financialService, financialInsightsService, imageCandidateService) +
+                receiptLocalTools(settlementReceiptService, receiptLinkSigner),
+        )
         val conversation = AiConversationOrchestrator(
             provider = provider,
             registry = toolRegistry,
@@ -96,12 +122,17 @@ fun main() {
             maxAudioDuration = Duration.ofMinutes(config.audio.maxAudioDurationMinutes.toLong()),
             maxAttempts = config.audio.maxAttempts,
         )
-        TwilioWhatsappMediaDownloader(config.twilio, config.audio.maxAudioBytes).use { downloader ->
+        TwilioWhatsappMediaDownloader(config.twilio, maxOf(config.audio.maxAudioBytes, config.image.maxImageBytes)).use { downloader ->
             GeminiSpeechToTextProvider(
                 project = config.ai.settings.project,
                 location = config.ai.settings.location,
                 model = config.audio.model,
             ).use { speechToText ->
+                GeminiImageAnalysisProvider(
+                    project = config.ai.settings.project,
+                    location = config.ai.settings.location,
+                    model = config.image.model,
+                ).use { imageAnalyzer ->
                 val worker = AudioProcessingWorker(
                     processor = ProcessAudioMessage(
                         repository = PostgresAudioProcessingRepository(database),
@@ -115,6 +146,29 @@ fun main() {
                     ),
                     pollInterval = audioProcessingConfig.pollInterval,
                 )
+                val imageProcessingConfig = ImageProcessingConfig(
+                    maxImageBytes = config.image.maxImageBytes,
+                    maxAttempts = config.image.maxAttempts,
+                    minimumAutoConfidence = config.image.minimumAutoConfidence,
+                )
+                val imageWorker = ImageProcessingWorker(
+                    processor = ProcessImageMessage(
+                        repository = PostgresImageProcessingRepository(database),
+                        whatsappRepository = whatsappRepository,
+                        downloader = downloader,
+                        storage = mediaStorage,
+                        analyzer = imageAnalyzer,
+                        conversation = conversation,
+                        senderAddress = senderAddress,
+                        sender = sender,
+                        categories = (
+                            DefaultFinancialCatalog.expenseCategories.keys +
+                                DefaultFinancialCatalog.incomeCategories
+                            ).toList(),
+                        config = imageProcessingConfig,
+                    ),
+                    pollInterval = imageProcessingConfig.pollInterval,
+                )
                 val whatsapp = WhatsappHttpDependencies(
                     expectedAccountSid = config.twilio.accountSid,
                     expectedSenderAddress = senderAddress,
@@ -126,17 +180,23 @@ fun main() {
                         conversation = conversation,
                     ),
                 )
+                val receiptMedia = ReceiptMediaHttpDependencies(
+                    ReceiptMediaAccess(settlementReceiptRepository, mediaStorage, receiptLinkSigner),
+                )
                 worker.start()
+                imageWorker.start()
                 try {
                     embeddedServer(
                         factory = Netty,
                         host = config.http.host,
                         port = config.http.port,
                     ) {
-                        module(database, whatsapp)
+                        module(database, whatsapp, receiptMedia)
                     }.start(wait = true)
                 } finally {
+                    imageWorker.close()
                     worker.close()
+                }
                 }
             }
         }
@@ -155,6 +215,7 @@ private fun createAiProvider(config: AiConfig): AiProvider {
 fun Application.module(
     database: DatabaseHealth,
     whatsapp: WhatsappHttpDependencies? = null,
+    receiptMedia: ReceiptMediaHttpDependencies? = null,
 ) {
-    configureHttp(database, whatsapp)
+    configureHttp(database, whatsapp, receiptMedia)
 }

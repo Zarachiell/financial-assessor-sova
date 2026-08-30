@@ -1,5 +1,9 @@
 package com.sova.audio.application
 
+import com.sova.media.application.DownloadedMedia
+import com.sova.media.application.MediaDownloadException
+import com.sova.media.application.MediaDownloadFailure
+import com.sova.media.application.WhatsappMediaDownloader
 import com.sova.whatsapp.application.SendMessageResult
 import com.sova.whatsapp.application.StoredWhatsappMessage
 import com.sova.whatsapp.application.WhatsappConversationContext
@@ -24,16 +28,6 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
-
-data class DownloadedMedia(
-    val bytes: ByteArray,
-    val contentType: String,
-    val filename: String,
-)
-
-fun interface WhatsappMediaDownloader {
-    suspend fun download(mediaUrl: String): DownloadedMedia
-}
 
 data class AudioInput(
     val bytes: ByteArray,
@@ -86,15 +80,6 @@ enum class AudioFailure(
     BLANK_TRANSCRIPTION("blank_transcription", false),
     ORCHESTRATOR_ERROR("orchestrator_error", false),
     OUTBOUND_FAILURE("outbound_failure", false),
-}
-
-class MediaDownloadException(
-    val failure: AudioFailure,
-    cause: Throwable? = null,
-) : RuntimeException(failure.code, cause) {
-    init {
-        require(failure.name.startsWith("DOWNLOAD_") || failure == AudioFailure.FILE_TOO_LARGE)
-    }
 }
 
 class SpeechToTextException(
@@ -182,7 +167,7 @@ class ProcessAudioMessage(
         } catch (cause: CancellationException) {
             throw cause
         } catch (cause: MediaDownloadException) {
-            handleFailure(job, cause.failure, startedAt)
+            handleFailure(job, cause.failure.toAudioFailure(), startedAt)
             true
         } catch (cause: SpeechToTextException) {
             handleFailure(job, cause.failure, startedAt)
@@ -207,7 +192,7 @@ class ProcessAudioMessage(
     private suspend fun process(job: ClaimedAudioJob) {
         val media = downloader.download(job.mediaUrl)
         if (media.bytes.size.toLong() > config.maxAudioBytes) {
-            throw MediaDownloadException(AudioFailure.FILE_TOO_LARGE)
+            throw MediaDownloadException(MediaDownloadFailure.FILE_TOO_LARGE)
         }
         repository.markDownloaded(job, media.bytes.size.toLong())
         repository.markProcessing(job)
@@ -321,6 +306,15 @@ class ProcessAudioMessage(
         const val SAFE_FAILURE_RESPONSE = "Não consegui processar seu áudio agora. Tente novamente em instantes."
         val LOGGER = LoggerFactory.getLogger("com.sova.audio.processing")
     }
+}
+
+private fun MediaDownloadFailure.toAudioFailure(): AudioFailure = when (this) {
+    MediaDownloadFailure.TIMEOUT -> AudioFailure.DOWNLOAD_TIMEOUT
+    MediaDownloadFailure.RATE_LIMITED -> AudioFailure.DOWNLOAD_RATE_LIMITED
+    MediaDownloadFailure.UNAVAILABLE -> AudioFailure.DOWNLOAD_UNAVAILABLE
+    MediaDownloadFailure.AUTHENTICATION -> AudioFailure.DOWNLOAD_AUTHENTICATION
+    MediaDownloadFailure.REJECTED -> AudioFailure.DOWNLOAD_REJECTED
+    MediaDownloadFailure.FILE_TOO_LARGE -> AudioFailure.FILE_TOO_LARGE
 }
 
 private class OutboundDeliveryException(cause: Throwable) : RuntimeException(cause)

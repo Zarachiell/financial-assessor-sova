@@ -22,6 +22,7 @@ import com.sova.finance.domain.Money
 import com.sova.finance.domain.SourceReferenceId
 import com.sova.finance.domain.Transaction
 import com.sova.finance.insights.application.FinancialInsightsApplicationService
+import com.sova.image.application.ImageCandidateService
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -35,14 +36,16 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.Normalizer
 import java.time.LocalDate
+import java.time.Clock
 import java.util.Locale
 import java.util.UUID
 
 fun financialLocalTools(
     service: FinancialApplicationService,
     insightsService: FinancialInsightsApplicationService? = null,
+    imageCandidateService: ImageCandidateService? = null,
 ): List<LocalTool> = listOf(
-    CreateTransactionTool(service),
+    CreateTransactionTool(service, imageCandidateService),
     UpdateTransactionTool(service),
     DeleteTransactionTool(service),
     GetCurrentBalanceTool(service),
@@ -50,16 +53,19 @@ fun financialLocalTools(
     GetIncomeTool(service),
     GetTransactionsTool(service),
     GetCategorySummaryTool(service),
-    CreateCashFlowEntryTool(service),
+    CreateCashFlowEntryTool(service, imageCandidateService),
     UpdateCashFlowEntryTool(service),
     DeleteCashFlowEntryTool(service),
     GetCashFlowEntriesTool(service),
     SettleCashFlowOccurrenceTool(service),
     GetCashFlowProjectionTool(service),
-) + insightsService?.let { financialInsightTools(service, it) }.orEmpty()
+) + imageCandidateService?.let { listOf(GetImageCandidatesTool(it)) }.orEmpty() +
+    insightsService?.let { financialInsightTools(service, it) }.orEmpty()
 
 class CreateTransactionTool(
     service: FinancialApplicationService,
+    private val imageCandidateService: ImageCandidateService? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) : FinancialLocalTool(service) {
     override val definition = AiToolDefinition(
         name = "create_transaction",
@@ -74,6 +80,9 @@ class CreateTransactionTool(
                 "account" to stringParameter("Nome da conta; omita para usar a conta padrão."),
                 "itemIndex" to integerParameter(
                     "Posição 1..8 obrigatória quando a mensagem contiver mais de um lançamento; omita para apenas um.",
+                ),
+                "imageAttachmentId" to stringParameter(
+                    "Identificador retornado pela análise de imagem; use apenas para registrar esse candidato confirmado.",
                 ),
             ),
             required = setOf("type", "amount", "description", "category", "occurredOn"),
@@ -90,7 +99,17 @@ class CreateTransactionTool(
         val itemIndex = arguments.optionalInt("itemIndex")?.also {
             require(it in 1..MAX_TRANSACTION_ITEMS) { "itemIndex must be between 1 and $MAX_TRANSACTION_ITEMS" }
         }
-        val sourceReference = if (itemIndex == null) {
+        val imageAttachmentId = arguments.optionalString("imageAttachmentId")?.let(UUID::fromString)
+            ?: context.attachmentId
+        if (context.attachmentId != null && imageAttachmentId != context.attachmentId) {
+            throw ToolRejectedException("image_attachment_mismatch")
+        }
+        if (imageAttachmentId != null && imageCandidateService?.find(context.financialContext, imageAttachmentId) == null) {
+            throw ToolRejectedException("image_candidate_not_found")
+        }
+        val sourceReference = if (imageAttachmentId != null) {
+            "attachment:$imageAttachmentId"
+        } else if (itemIndex == null) {
             context.inboundMessageSid
         } else {
             "${context.inboundMessageSid}:$itemIndex"
@@ -104,10 +123,11 @@ class CreateTransactionTool(
                 description = description,
                 categoryId = category.id,
                 occurredOn = occurredOn,
-                source = context.source,
+                source = if (imageAttachmentId == null) context.source else FinancialSource.WHATSAPP_IMAGE,
                 sourceReferenceId = SourceReferenceId.of(sourceReference),
             ),
         ).requiredValue()
+        imageAttachmentId?.let { imageCandidateService?.markConsumed(context.financialContext, it, clock.instant()) }
 
         return buildJsonObject {
             put("ok", JsonPrimitive(true))
@@ -375,6 +395,8 @@ class GetCategorySummaryTool(
 
 class CreateCashFlowEntryTool(
     service: FinancialApplicationService,
+    private val imageCandidateService: ImageCandidateService? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) : FinancialLocalTool(service) {
     override val definition = AiToolDefinition(
         name = "create_cash_flow_entry",
@@ -393,6 +415,9 @@ class CreateCashFlowEntryTool(
                 "itemIndex" to integerParameter(
                     "Posição 1..8 obrigatória quando a mensagem contiver mais de uma previsão; omita para apenas uma.",
                 ),
+                "imageAttachmentId" to stringParameter(
+                    "Identificador retornado pela análise de imagem; use apenas para registrar esse candidato confirmado.",
+                ),
             ),
             required = setOf("type", "amount", "description", "recurrence", "startDate"),
         ),
@@ -406,7 +431,17 @@ class CreateCashFlowEntryTool(
         val itemIndex = arguments.optionalInt("itemIndex")?.also {
             require(it in 1..MAX_CASH_FLOW_ITEMS) { "itemIndex must be between 1 and $MAX_CASH_FLOW_ITEMS" }
         }
-        val sourceReference = if (itemIndex == null) {
+        val imageAttachmentId = arguments.optionalString("imageAttachmentId")?.let(UUID::fromString)
+            ?: context.attachmentId
+        if (context.attachmentId != null && imageAttachmentId != context.attachmentId) {
+            throw ToolRejectedException("image_attachment_mismatch")
+        }
+        if (imageAttachmentId != null && imageCandidateService?.find(context.financialContext, imageAttachmentId) == null) {
+            throw ToolRejectedException("image_candidate_not_found")
+        }
+        val sourceReference = if (imageAttachmentId != null) {
+            "attachment:$imageAttachmentId"
+        } else if (itemIndex == null) {
             context.inboundMessageSid
         } else {
             "${context.inboundMessageSid}:$itemIndex"
@@ -423,10 +458,11 @@ class CreateCashFlowEntryTool(
                 startDate = arguments.requiredDate("startDate"),
                 endDate = arguments.optionalDate("endDate"),
                 dayOfMonth = arguments.optionalInt("dayOfMonth"),
-                source = context.source,
+                source = if (imageAttachmentId == null) context.source else FinancialSource.WHATSAPP_IMAGE,
                 sourceReferenceId = SourceReferenceId.of(sourceReference),
             ),
         ).requiredValue()
+        imageAttachmentId?.let { imageCandidateService?.markConsumed(context.financialContext, it, clock.instant()) }
 
         return buildJsonObject {
             put("ok", JsonPrimitive(true))

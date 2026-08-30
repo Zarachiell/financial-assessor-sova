@@ -124,6 +124,7 @@ class PostgresWhatsappRepository(
         message: StoredWhatsappMessage,
         attachments: List<StoredWhatsappAttachment>,
         audioJobAttachmentId: UUID?,
+        imageJobAttachmentId: UUID?,
     ): Boolean =
         withContext(Dispatchers.IO) {
             require(attachments.all { it.whatsappMessageId == message.id }) {
@@ -131,6 +132,12 @@ class PostgresWhatsappRepository(
             }
             require(audioJobAttachmentId == null || attachments.any { it.id == audioJobAttachmentId }) {
                 "Audio job attachment must belong to the inbound message"
+            }
+            require(imageJobAttachmentId == null || attachments.any { it.id == imageJobAttachmentId }) {
+                "Image job attachment must belong to the inbound message"
+            }
+            require(audioJobAttachmentId == null || imageJobAttachmentId == null) {
+                "Only one media processing job may be queued per inbound message"
             }
             database.inTransaction { connection ->
                 val context = DSL.using(connection, SQLDialect.POSTGRES)
@@ -156,8 +163,10 @@ class PostgresWhatsappRepository(
                     context.execute(
                         """
                         INSERT INTO attachments
-                            (id, whatsapp_message_id, media_index, media_url, content_type, media_type, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                            (id, whatsapp_message_id, household_id, media_index, media_url, content_type, media_type, status)
+                        SELECT ?, ?, household_id, ?, ?, ?, ?, ?
+                        FROM users
+                        WHERE id = ?
                         """.trimIndent(),
                         attachment.id,
                         attachment.whatsappMessageId,
@@ -166,6 +175,7 @@ class PostgresWhatsappRepository(
                         attachment.contentType,
                         attachment.mediaType.name,
                         attachment.status.name,
+                        message.userId,
                     )
                 }
                 audioJobAttachmentId?.let { attachmentId ->
@@ -173,6 +183,16 @@ class PostgresWhatsappRepository(
                         """
                         INSERT INTO processing_jobs (id, type, reference_id, status)
                         VALUES (?, 'PROCESS_AUDIO_MESSAGE', ?, 'PENDING')
+                        """.trimIndent(),
+                        UUID.randomUUID(),
+                        attachmentId,
+                    )
+                }
+                imageJobAttachmentId?.let { attachmentId ->
+                    context.execute(
+                        """
+                        INSERT INTO processing_jobs (id, type, reference_id, status)
+                        VALUES (?, 'PROCESS_IMAGE_MESSAGE', ?, 'PENDING')
                         """.trimIndent(),
                         UUID.randomUUID(),
                         attachmentId,
