@@ -555,6 +555,7 @@ class GetCashFlowEntriesTool(
                 "to" to stringParameter("Data final inclusiva YYYY-MM-DD."),
                 "type" to stringParameter("Tipo opcional.", "INCOME", "EXPENSE"),
                 "status" to stringParameter("Status opcional.", "PENDING", "PAID"),
+                "recurrence" to stringParameter("Recorrência opcional.", "ONCE", "MONTHLY"),
                 "account" to stringParameter("Nome opcional da conta."),
                 "limit" to integerParameter("Máximo de ocorrências, entre 1 e 100; padrão 50."),
             ),
@@ -576,14 +577,74 @@ class GetCashFlowEntriesTool(
                 accountId = account?.id,
                 status = arguments.optionalString("status")?.let(CashFlowOccurrenceStatus::valueOf),
             ),
-        ).requiredValue()
+        ).requiredValue().let { values ->
+            val recurrence = arguments.optionalString("recurrence")?.let(CashFlowRecurrence::valueOf)
+            if (recurrence == null) values else values.filter { occurrence -> occurrence.entry.recurrence == recurrence }
+        }
         val accounts = accounts(context).associateBy(Account::id)
         val categories = categories(context).associateBy(Category::id)
+        val totalAmount = occurrences.sumOf { occurrence -> occurrence.entry.money.amount }
+        val incomeTotal = occurrences
+            .filter { occurrence -> occurrence.entry.type == FinancialEntryType.INCOME }
+            .sumOf { occurrence -> occurrence.entry.money.amount }
+        val expenseTotal = occurrences
+            .filter { occurrence -> occurrence.entry.type == FinancialEntryType.EXPENSE }
+            .sumOf { occurrence -> occurrence.entry.money.amount }
+        val monthlyExpenses = occurrences.filter { occurrence ->
+            occurrence.entry.type == FinancialEntryType.EXPENSE &&
+                occurrence.entry.recurrence == CashFlowRecurrence.MONTHLY
+        }
+        val monthlyExpenseTotal = monthlyExpenses.sumOf { occurrence -> occurrence.entry.money.amount }
+        val plannedNetAmount = incomeTotal - expenseTotal
+        val incomeAfterMonthlyExpenses = incomeTotal - monthlyExpenseTotal
+
+        fun categoryBreakdown(type: FinancialEntryType) = occurrences
+            .filter { occurrence -> occurrence.entry.type == type }
+            .groupBy { occurrence ->
+                occurrence.entry.categoryId?.let(categories::get)?.name?.value ?: "Sem categoria"
+            }
+            .toSortedMap()
+
         return buildJsonObject {
             put("ok", JsonPrimitive(true))
             put("count", JsonPrimitive(minOf(occurrences.size, limit)))
             put("totalCount", JsonPrimitive(occurrences.size))
             put("truncated", JsonPrimitive(occurrences.size > limit))
+            put("totalAmount", moneyJson(totalAmount))
+            put("incomeTotal", moneyJson(incomeTotal))
+            put("expenseTotal", moneyJson(expenseTotal))
+            put("monthlyExpenseCount", JsonPrimitive(monthlyExpenses.size))
+            put("monthlyExpenseTotal", moneyJson(monthlyExpenseTotal))
+            put("plannedNetAmount", moneyJson(plannedNetAmount))
+            put("incomeAfterMonthlyExpenses", moneyJson(incomeAfterMonthlyExpenses))
+            put(
+                "incomeByCategory",
+                buildJsonArray {
+                    categoryBreakdown(FinancialEntryType.INCOME).forEach { (category, values) ->
+                        add(
+                            buildJsonObject {
+                                put("category", JsonPrimitive(category))
+                                put("total", moneyJson(values.sumOf { it.entry.money.amount }))
+                                put("count", JsonPrimitive(values.size))
+                            },
+                        )
+                    }
+                },
+            )
+            put(
+                "expenseByCategory",
+                buildJsonArray {
+                    categoryBreakdown(FinancialEntryType.EXPENSE).forEach { (category, values) ->
+                        add(
+                            buildJsonObject {
+                                put("category", JsonPrimitive(category))
+                                put("total", moneyJson(values.sumOf { it.entry.money.amount }))
+                                put("count", JsonPrimitive(values.size))
+                            },
+                        )
+                    }
+                },
+            )
             put(
                 "entries",
                 buildJsonArray {

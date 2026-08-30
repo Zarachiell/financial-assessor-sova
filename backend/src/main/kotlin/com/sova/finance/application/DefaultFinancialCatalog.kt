@@ -23,6 +23,8 @@ object DefaultFinancialCatalog {
 
     val incomeCategories = listOf(
         "Salário",
+        "Bônus",
+        "VR/VA",
         "Reembolso",
         "Renda extra",
         "Outros",
@@ -48,18 +50,18 @@ class DefaultFinancialCatalogProvisioner(
         }
 
         val categories = service.listCategories(context).requiredValue()
-        if (categories.none { it.active && it.type == FinancialEntryType.EXPENSE }) {
-            DefaultFinancialCatalog.expenseCategories.forEach { (name, nature) ->
+        DefaultFinancialCatalog.expenseCategories.forEach { (name, nature) ->
+            if (categories.none { it.type == FinancialEntryType.EXPENSE && it.name.value == name }) {
                 createCategory(context, name, FinancialEntryType.EXPENSE, nature)
             }
-            requireActiveCategory(context, FinancialEntryType.EXPENSE)
         }
-        if (categories.none { it.active && it.type == FinancialEntryType.INCOME }) {
-            DefaultFinancialCatalog.incomeCategories.forEach { name ->
+        requireActiveCategory(context, FinancialEntryType.EXPENSE)
+        DefaultFinancialCatalog.incomeCategories.forEach { name ->
+            if (categories.none { it.type == FinancialEntryType.INCOME && it.name.value == name }) {
                 createCategory(context, name, FinancialEntryType.INCOME)
             }
-            requireActiveCategory(context, FinancialEntryType.INCOME)
         }
+        requireActiveCategory(context, FinancialEntryType.INCOME)
     }
 
     private suspend fun createCategory(

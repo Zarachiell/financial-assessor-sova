@@ -297,6 +297,27 @@ class AiConversationOrchestratorTest {
     }
 
     @Test
+    fun `cash flow list accepts deterministic expense total returned by tool`() = runBlocking {
+        val provider = QueueAiProvider(
+            listOf(
+                toolCalls(AiToolCall("call-fixed", "get_cash_flow_entries", "{}")),
+                answer(
+                    "As contas fixas somam R$ 3.990,00. A renda prevista é R$ 15.250,00 e sobram R$ 11.260,00.",
+                ),
+            ),
+        )
+        val orchestrator = orchestrator(provider, listOf(FixedCashFlowEntriesTool())) { emptyList() }
+
+        val response = orchestrator.respond(context("Quais são os gastos fixos do mês?"))
+
+        assertTrue(response.contains("R$ 3.990,00"))
+        assertTrue(response.contains("R$ 15.250,00"))
+        assertTrue(response.contains("R$ 11.260,00"))
+        assertFalse(response.contains("Não consegui validar"))
+        assertTrue(provider.requests.first().messages.first().content.orEmpty().contains("monthlyExpenseTotal"))
+    }
+
+    @Test
     fun `warms a cold financial answer with the authenticated family role`() = runBlocking {
         val expenses = RecordingTool("get_expenses")
         val provider = QueueAiProvider(
@@ -560,6 +581,24 @@ private class GroundedAnalyticTool : LocalTool {
         put("totalIncome", JsonPrimitive("13250.00".toBigDecimal()))
         put("totalExpenses", JsonPrimitive("100.00".toBigDecimal()))
         put("percentageChange", JsonPrimitive("25.00".toBigDecimal()))
+    }
+}
+
+private class FixedCashFlowEntriesTool : LocalTool {
+    override val definition = AiToolDefinition(
+        name = "get_cash_flow_entries",
+        description = "Returns fixed cash flow entries and deterministic totals.",
+        parameters = AiToolParameters(
+            properties = mapOf("from" to AiToolParameter(AiJsonType.STRING, "Period start.")),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject = buildJsonObject {
+        put("ok", JsonPrimitive(true))
+        put("count", JsonPrimitive(5))
+        put("monthlyExpenseTotal", JsonPrimitive("3990.00".toBigDecimal()))
+        put("incomeTotal", JsonPrimitive("15250.00".toBigDecimal()))
+        put("incomeAfterMonthlyExpenses", JsonPrimitive("11260.00".toBigDecimal()))
     }
 }
 

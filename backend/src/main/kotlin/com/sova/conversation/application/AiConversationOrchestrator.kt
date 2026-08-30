@@ -402,7 +402,12 @@ class AiConversationOrchestrator(
             por tipo use incomeOccurrenceCount e expenseOccurrenceCount. Para listar contas futuras e descobrir o
             identificador exato, use get_cash_flow_entries. Para quitar, use settle_cash_flow_occurrence com o
             cashFlowEntryId e scheduledOn retornados; paidOn é a data real e não pode estar no futuro. Edição/exclusão
-            exige identificar primeiro um único registro via get_transactions ou get_cash_flow_entries. Categorias de despesa:
+            exige identificar primeiro um único registro via get_transactions ou get_cash_flow_entries.
+            "Gastos fixos do mês" pede get_cash_flow_entries no mês sem type nem recurrence: liste somente itens
+            EXPENSE/MONTHLY como fixos e use monthlyExpenseTotal. Se houver receitas, use incomeByCategory,
+            incomeTotal e incomeAfterMonthlyExpenses para um insight; nunca faça somas ou subtrações no modelo.
+            Salário = Salário; bônus = Bônus; VR, VA, vale-refeição ou vale-alimentação = VR/VA.
+            Categorias de despesa:
             ${DefaultFinancialCatalog.expenseCategories.keys.joinToString()}.
             Categorias de receita: ${DefaultFinancialCatalog.incomeCategories.joinToString()}. Almoço/alimentação = Alimentação;
             restaurante = Restaurante; reembolso = Reembolso.

@@ -54,15 +54,68 @@ class FinancialToolsIntegrationTest {
                 assertTrue(fixture.dispatch("create_cash_flow_entry", arguments, fixture.userA, messageSid).successful)
                 assertTrue(fixture.dispatch("create_cash_flow_entry", arguments, fixture.userA, messageSid).successful)
             }
+            fixture.dispatch(
+                "create_cash_flow_entry",
+                """{"type":"EXPENSE","amount":777,"description":"Despesa pontual","recurrence":"ONCE","startDate":"2026-09-20"}""",
+                fixture.userA,
+                "SM-ONCE",
+            )
 
             val persisted = fixture.service.listCashFlowEntries(fixture.userA).successValue()
-            assertEquals(entries.map { it.first }.toSet(), persisted.map { it.description.value }.toSet())
-            assertEquals(9, persisted.size)
+            assertEquals(entries.map { it.first }.toSet() + "Despesa pontual", persisted.map { it.description.value }.toSet())
+            assertEquals(10, persisted.size)
             assertEquals(
                 (1..4).map { "SM-FIXED-BATCH-1:$it" }.toSet() +
                     (1..5).map { "SM-FIXED-BATCH-2:$it" }.toSet(),
-                persisted.mapNotNull { it.sourceReferenceId?.value }.toSet(),
+                persisted.mapNotNull { it.sourceReferenceId?.value }.filterNot { it == "SM-ONCE" }.toSet(),
             )
+            val fixedExpenses = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-09-01","to":"2026-09-30","type":"EXPENSE","recurrence":"MONTHLY"}""",
+                fixture.userA,
+                "SM-LIST-FIXED",
+            ).json()
+            assertEquals(9, fixedExpenses.getValue("count").jsonPrimitive.content.toInt())
+            assertEquals(BigDecimal("6590.27"), fixedExpenses.getValue("expenseTotal").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("6590.27"), fixedExpenses.getValue("totalAmount").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("0.00"), fixedExpenses.getValue("incomeTotal").jsonPrimitive.content.toBigDecimal())
+            assertTrue(fixedExpenses.toString().contains("Assinatura Wellhub"))
+            assertFalse(fixedExpenses.toString().contains("Despesa pontual"))
+        }
+    }
+
+    @Test
+    fun `monthly cash flow panorama calculates fixed expenses categorized income and remaining amount`() = runBlocking {
+        withFixture { fixture ->
+            listOf(
+                """{"type":"EXPENSE","amount":3000,"description":"Moradia","recurrence":"MONTHLY","startDate":"2026-08-01","dayOfMonth":10,"category":"Moradia"}""",
+                """{"type":"EXPENSE","amount":990,"description":"Contas da casa","recurrence":"MONTHLY","startDate":"2026-08-01","dayOfMonth":15,"category":"Moradia"}""",
+                """{"type":"INCOME","amount":13250,"description":"Salário líquido","recurrence":"MONTHLY","startDate":"2026-08-01","dayOfMonth":30,"category":"Salário"}""",
+                """{"type":"INCOME","amount":1000,"description":"Bônus","recurrence":"ONCE","startDate":"2026-09-20","category":"Bônus"}""",
+                """{"type":"INCOME","amount":1000,"description":"Benefícios","recurrence":"MONTHLY","startDate":"2026-08-01","dayOfMonth":1,"category":"VR/VA"}""",
+            ).forEachIndexed { index, arguments ->
+                assertTrue(
+                    fixture.dispatch("create_cash_flow_entry", arguments, fixture.userA, "SM-PANORAMA-$index").successful,
+                )
+            }
+
+            val panorama = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-09-01","to":"2026-09-30"}""",
+                fixture.userA,
+                "SM-GET-PANORAMA",
+            ).json()
+
+            assertEquals(BigDecimal("3990.00"), panorama.getValue("monthlyExpenseTotal").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("15250.00"), panorama.getValue("incomeTotal").jsonPrimitive.content.toBigDecimal())
+            assertEquals(
+                BigDecimal("11260.00"),
+                panorama.getValue("incomeAfterMonthlyExpenses").jsonPrimitive.content.toBigDecimal(),
+            )
+            assertEquals(BigDecimal("11260.00"), panorama.getValue("plannedNetAmount").jsonPrimitive.content.toBigDecimal())
+            assertTrue(panorama.getValue("incomeByCategory").jsonArray.any { it.toString().contains("Salário") })
+            assertTrue(panorama.getValue("incomeByCategory").jsonArray.any { it.toString().contains("Bônus") })
+            assertTrue(panorama.getValue("incomeByCategory").jsonArray.any { it.toString().contains("VR/VA") })
         }
     }
 
@@ -90,6 +143,8 @@ class FinancialToolsIntegrationTest {
             assertEquals(ExpenseNature.FIXED, catalog.getValue("Moradia").expenseNature)
             assertEquals(ExpenseNature.DISCRETIONARY, catalog.getValue("Restaurante").expenseNature)
             assertEquals(ExpenseNature.UNCLASSIFIED, catalog.getValue("Alimentação").expenseNature)
+            assertEquals(FinancialEntryType.INCOME, catalog.getValue("Bônus").type)
+            assertEquals(FinancialEntryType.INCOME, catalog.getValue("VR/VA").type)
 
             val expense = fixture.dispatch(
                 "create_transaction",
