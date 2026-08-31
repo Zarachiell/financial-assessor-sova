@@ -185,6 +185,11 @@ data class CashFlowEntry(
     }
 }
 
+enum class CashFlowSettlementStatus {
+    ACTIVE,
+    CANCELLED,
+}
+
 data class CashFlowSettlement(
     val id: UUID,
     val householdId: UUID,
@@ -193,7 +198,24 @@ data class CashFlowSettlement(
     val transactionId: UUID,
     val settledByUserId: UUID,
     val settledAt: Instant,
-)
+    val status: CashFlowSettlementStatus = CashFlowSettlementStatus.ACTIVE,
+    val note: String? = null,
+    val cancelledAt: Instant? = null,
+    val cancelledByUserId: UUID? = null,
+    val cancellationReason: String? = null,
+) {
+    init {
+        require(note == null || note.isNotBlank()) { "Settlement note must not be blank" }
+        when (status) {
+            CashFlowSettlementStatus.ACTIVE -> require(
+                cancelledAt == null && cancelledByUserId == null && cancellationReason == null,
+            ) { "Active settlement must not contain cancellation data" }
+            CashFlowSettlementStatus.CANCELLED -> require(
+                cancelledAt != null && cancelledByUserId != null && !cancellationReason.isNullOrBlank(),
+            ) { "Cancelled settlement requires complete cancellation data" }
+        }
+    }
+}
 
 data class CashFlowSettlementReceipt(
     val settlement: CashFlowSettlement,

@@ -11,6 +11,7 @@ import com.sova.finance.domain.CashFlowProjectionCalculator
 import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.CashFlowSettlement
 import com.sova.finance.domain.CashFlowSettlementReceipt
+import com.sova.finance.domain.CashFlowSettlementStatus
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.Currency
@@ -136,9 +137,43 @@ data class UpdateCashFlowEntryCommand(
 data class SettleCashFlowOccurrenceCommand(
     val scheduledOn: LocalDate,
     val paidOn: LocalDate,
+    val settledMoney: Money? = null,
     val accountId: UUID? = null,
     val categoryId: UUID? = null,
-)
+    val note: String? = null,
+) {
+    init {
+        require(note == null || (note.isNotBlank() && note.length <= 500)) {
+            "Settlement note must contain between 1 and 500 characters"
+        }
+    }
+}
+
+data class CancelCashFlowSettlementCommand(
+    val reason: String,
+) {
+    init {
+        require(reason.isNotBlank()) { "Settlement cancellation reason must not be blank" }
+        require(reason.length <= 500) { "Settlement cancellation reason must have at most 500 characters" }
+    }
+}
+
+data class GetCashFlowSettlementsQuery(
+    val from: LocalDate,
+    val to: LocalDate,
+    val status: CashFlowSettlementStatus? = null,
+) {
+    init {
+        require(!from.isAfter(to)) { "Settlement period start must not be after its end" }
+    }
+}
+
+data class CashFlowSettlementDetails(
+    val receipt: CashFlowSettlementReceipt,
+    val plannedMoney: Money,
+) {
+    val variance: BigDecimal = receipt.transaction.money.amount - plannedMoney.amount
+}
 
 enum class CashFlowOccurrenceStatus {
     PENDING,
@@ -158,6 +193,8 @@ data class GetCashFlowOccurrencesQuery(
     val type: FinancialEntryType? = null,
     val accountId: UUID? = null,
     val status: CashFlowOccurrenceStatus? = null,
+    val descriptionContains: String? = null,
+    val plannedAmount: Money? = null,
 ) {
     init {
         require(!from.isAfter(to)) { "Cash flow period start must not be after its end" }
@@ -209,6 +246,7 @@ enum class FinancialRejection {
     CASH_FLOW_ENTRY_NOT_FOUND,
     CASH_FLOW_ENTRY_HAS_SETTLEMENTS,
     CASH_FLOW_OCCURRENCE_NOT_FOUND,
+    CASH_FLOW_SETTLEMENT_NOT_FOUND,
     SETTLEMENT_ACCOUNT_REQUIRED,
     SETTLEMENT_CATEGORY_REQUIRED,
     FUTURE_PAYMENT_DATE,
@@ -295,7 +333,15 @@ interface FinancialRepository {
         scheduledOn: LocalDate,
     ): CashFlowSettlementReceipt?
 
+    suspend fun findCashFlowSettlementById(householdId: UUID, settlementId: UUID): CashFlowSettlementReceipt?
+
     suspend fun listCashFlowSettlements(
+        householdId: UUID,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<CashFlowSettlementReceipt>
+
+    suspend fun listCashFlowSettlementHistory(
         householdId: UUID,
         from: LocalDate,
         to: LocalDate,
@@ -304,6 +350,14 @@ interface FinancialRepository {
     suspend fun hasCashFlowSettlements(householdId: UUID, entryId: UUID): Boolean
 
     suspend fun insertCashFlowSettlement(receipt: CashFlowSettlementReceipt): Boolean
+
+    suspend fun cancelCashFlowSettlement(
+        householdId: UUID,
+        settlementId: UUID,
+        cancelledByUserId: UUID,
+        cancelledAt: Instant,
+        reason: String,
+    ): Boolean
 }
 
 class FinancialApplicationService(
@@ -666,6 +720,13 @@ class FinancialApplicationService(
                 )
             }
         }.filter { query.status == null || it.status == query.status }
+            .filter { occurrence ->
+                query.descriptionContains == null || occurrence.entry.description.value.contains(
+                    query.descriptionContains,
+                    ignoreCase = true,
+                )
+            }
+            .filter { occurrence -> query.plannedAmount == null || occurrence.entry.money == query.plannedAmount }
             .sortedWith(compareBy(CashFlowOccurrenceDetails::scheduledOn, { it.entry.description.value }, { it.entry.id }))
         return success(occurrences)
     }
@@ -687,6 +748,7 @@ class FinancialApplicationService(
         }
         val today = LocalDate.now(clock.withZone(householdZone))
         if (command.paidOn.isAfter(today)) return rejected(FinancialRejection.FUTURE_PAYMENT_DATE)
+        val settledMoney = command.settledMoney ?: entry.money
 
         val accountId = command.accountId ?: entry.accountId
             ?: return rejected(FinancialRejection.SETTLEMENT_ACCOUNT_REQUIRED)
@@ -702,7 +764,7 @@ class FinancialApplicationService(
             createdByUserId = context.userId,
             accountId = accountId,
             type = entry.type,
-            money = entry.money,
+            money = settledMoney,
             currency = entry.currency,
             description = entry.description,
             categoryId = categoryId,
@@ -719,11 +781,69 @@ class FinancialApplicationService(
             transactionId = transaction.id,
             settledByUserId = context.userId,
             settledAt = now,
+            note = command.note?.trim()?.takeIf(String::isNotBlank),
         )
         val receipt = CashFlowSettlementReceipt(settlement, transaction)
         if (repository.insertCashFlowSettlement(receipt)) return success(Creation(receipt, created = true))
         repository.findCashFlowSettlement(context.householdId, entryId, command.scheduledOn)?.let {
             return success(Creation(it, created = false))
+        }
+        return rejected(FinancialRejection.PERSISTENCE_CONFLICT)
+    }
+
+    suspend fun getCashFlowSettlement(
+        context: FinancialContext,
+        settlementId: UUID,
+    ): FinancialResult<CashFlowSettlementDetails> {
+        if (!repository.isActiveMember(context)) return unauthorized()
+        val receipt = repository.findCashFlowSettlementById(context.householdId, settlementId)
+            ?: return rejected(FinancialRejection.CASH_FLOW_SETTLEMENT_NOT_FOUND)
+        val entry = repository.findCashFlowEntry(context.householdId, receipt.settlement.cashFlowEntryId)
+            ?: return rejected(FinancialRejection.CASH_FLOW_ENTRY_NOT_FOUND)
+        return success(CashFlowSettlementDetails(receipt, entry.money))
+    }
+
+    suspend fun listCashFlowSettlements(
+        context: FinancialContext,
+        query: GetCashFlowSettlementsQuery,
+    ): FinancialResult<List<CashFlowSettlementDetails>> {
+        if (!repository.isActiveMember(context)) return unauthorized()
+        val details = repository.listCashFlowSettlementHistory(context.householdId, query.from, query.to)
+            .filter { query.status == null || it.settlement.status == query.status }
+            .mapNotNull { receipt ->
+                repository.findCashFlowEntry(context.householdId, receipt.settlement.cashFlowEntryId)
+                    ?.let { entry -> CashFlowSettlementDetails(receipt, entry.money) }
+            }
+        return success(details)
+    }
+
+    suspend fun cancelCashFlowSettlement(
+        context: FinancialContext,
+        settlementId: UUID,
+        command: CancelCashFlowSettlementCommand,
+    ): FinancialResult<Creation<CashFlowSettlementReceipt>> {
+        if (!repository.isActiveMember(context)) return unauthorized()
+        val existing = repository.findCashFlowSettlementById(context.householdId, settlementId)
+            ?: return rejected(FinancialRejection.CASH_FLOW_SETTLEMENT_NOT_FOUND)
+        if (existing.settlement.status == CashFlowSettlementStatus.CANCELLED) {
+            return success(Creation(existing, created = false))
+        }
+        val cancelled = repository.cancelCashFlowSettlement(
+            context.householdId,
+            settlementId,
+            context.userId,
+            clock.instant(),
+            command.reason.trim(),
+        )
+        if (cancelled) {
+            val receipt = repository.findCashFlowSettlementById(context.householdId, settlementId)
+                ?: return rejected(FinancialRejection.PERSISTENCE_CONFLICT)
+            return success(Creation(receipt, created = true))
+        }
+        repository.findCashFlowSettlementById(context.householdId, settlementId)?.let {
+            if (it.settlement.status == CashFlowSettlementStatus.CANCELLED) {
+                return success(Creation(it, created = false))
+            }
         }
         return rejected(FinancialRejection.PERSISTENCE_CONFLICT)
     }

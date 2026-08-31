@@ -485,11 +485,13 @@ class AiConversationOrchestrator(
             "update_cash_flow_entry",
             "delete_cash_flow_entry",
             "settle_cash_flow_occurrence",
+            "cancel_cash_flow_settlement",
             "link_settlement_receipt",
         )
         val RECORD_LOOKUP_TOOLS = setOf(
             "get_transactions",
             "get_cash_flow_entries",
+            "get_cash_flow_settlements",
             "get_image_candidates",
             "get_settlement_receipts",
         )

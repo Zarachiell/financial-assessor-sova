@@ -2,11 +2,13 @@ package com.sova.ai.application
 
 import com.sova.finance.application.CreateCashFlowEntryCommand
 import com.sova.finance.application.CreateTransactionCommand
+import com.sova.finance.application.CancelCashFlowSettlementCommand
 import com.sova.finance.application.CashFlowOccurrenceStatus
 import com.sova.finance.application.FinancialApplicationService
 import com.sova.finance.application.FinancialResult
 import com.sova.finance.application.GetCashFlowOccurrencesQuery
 import com.sova.finance.application.GetCashFlowProjectionQuery
+import com.sova.finance.application.GetCashFlowSettlementsQuery
 import com.sova.finance.application.SettleCashFlowOccurrenceCommand
 import com.sova.finance.application.TransactionFilters
 import com.sova.finance.application.UpdateCashFlowEntryCommand
@@ -14,6 +16,7 @@ import com.sova.finance.application.UpdateTransactionCommand
 import com.sova.finance.domain.Account
 import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
+import com.sova.finance.domain.CashFlowSettlementStatus
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.FinancialDescription
 import com.sova.finance.domain.FinancialEntryType
@@ -58,6 +61,8 @@ fun financialLocalTools(
     DeleteCashFlowEntryTool(service),
     GetCashFlowEntriesTool(service),
     SettleCashFlowOccurrenceTool(service),
+    CancelCashFlowSettlementTool(service),
+    GetCashFlowSettlementsTool(service),
     GetCashFlowProjectionTool(service),
 ) + imageCandidateService?.let { listOf(GetImageCandidatesTool(it)) }.orEmpty() +
     insightsService?.let { financialInsightTools(service, it) }.orEmpty()
@@ -593,6 +598,8 @@ class GetCashFlowEntriesTool(
                 "status" to stringParameter("Status opcional.", "PENDING", "PAID"),
                 "recurrence" to stringParameter("Recorrência opcional.", "ONCE", "MONTHLY"),
                 "account" to stringParameter("Nome opcional da conta."),
+                "description" to stringParameter("Trecho opcional da descrição para resolver candidatos."),
+                "amount" to numberParameter("Valor previsto exato opcional para resolver candidatos."),
                 "limit" to integerParameter("Máximo de ocorrências, entre 1 e 100; padrão 50."),
             ),
             required = setOf("from", "to"),
@@ -612,6 +619,8 @@ class GetCashFlowEntriesTool(
                 type = arguments.optionalEntryType("type"),
                 accountId = account?.id,
                 status = arguments.optionalString("status")?.let(CashFlowOccurrenceStatus::valueOf),
+                descriptionContains = arguments.optionalString("description"),
+                plannedAmount = arguments.optionalDecimal("amount")?.let(Money::of),
             ),
         ).requiredValue().let { values ->
             val recurrence = arguments.optionalString("recurrence")?.let(CashFlowRecurrence::valueOf)
@@ -645,6 +654,16 @@ class GetCashFlowEntriesTool(
             put("ok", JsonPrimitive(true))
             put("count", JsonPrimitive(minOf(occurrences.size, limit)))
             put("totalCount", JsonPrimitive(occurrences.size))
+            put(
+                "candidateResolution",
+                JsonPrimitive(
+                    when (occurrences.size) {
+                        0 -> "NONE"
+                        1 -> "UNIQUE"
+                        else -> "AMBIGUOUS"
+                    },
+                ),
+            )
             put("truncated", JsonPrimitive(occurrences.size > limit))
             put("totalAmount", moneyJson(totalAmount))
             put("incomeTotal", moneyJson(incomeTotal))
@@ -708,6 +727,11 @@ class GetCashFlowEntriesTool(
                                     put("transactionId", JsonPrimitive(receipt.transaction.id.toString()))
                                     put("paidOn", JsonPrimitive(receipt.transaction.occurredOn.toString()))
                                     put("settledAt", JsonPrimitive(receipt.settlement.settledAt.toString()))
+                                    put("settledAmount", moneyJson(receipt.transaction.money.amount))
+                                    put(
+                                        "variance",
+                                        moneyJson(receipt.transaction.money.amount - entry.money.amount),
+                                    )
                                 }
                             },
                         )
@@ -734,8 +758,10 @@ class SettleCashFlowOccurrenceTool(
                 "cashFlowEntryId" to stringParameter("Identificador retornado por get_cash_flow_entries."),
                 "scheduledOn" to stringParameter("Vencimento exato da ocorrência, no formato YYYY-MM-DD."),
                 "paidOn" to stringParameter("Data real do pagamento ou recebimento, no formato YYYY-MM-DD."),
+                "settledAmount" to numberParameter("Valor realmente pago ou recebido; omita para usar o previsto."),
                 "account" to stringParameter("Conta; obrigatória somente se a previsão não tiver conta."),
                 "category" to stringParameter("Categoria; obrigatória somente se a previsão não tiver categoria."),
+                "note" to stringParameter("Observação opcional da liquidação."),
             ),
             required = setOf("cashFlowEntryId", "scheduledOn", "paidOn"),
         ),
@@ -752,8 +778,10 @@ class SettleCashFlowOccurrenceTool(
             SettleCashFlowOccurrenceCommand(
                 scheduledOn = arguments.requiredDate("scheduledOn"),
                 paidOn = arguments.requiredDate("paidOn"),
+                settledMoney = arguments.optionalDecimal("settledAmount")?.let(Money::of),
                 accountId = account?.id,
                 categoryId = category?.id,
+                note = arguments.optionalString("note"),
             ),
         ).requiredValue()
         val receipt = creation.value
@@ -769,10 +797,103 @@ class SettleCashFlowOccurrenceTool(
             put("settledAt", JsonPrimitive(receipt.settlement.settledAt.toString()))
             put("type", JsonPrimitive(receipt.transaction.type.name))
             put("amount", moneyJson(receipt.transaction.money.amount))
+            put("plannedAmount", moneyJson(entry.money.amount))
+            put("variance", moneyJson(receipt.transaction.money.amount - entry.money.amount))
             put("currency", JsonPrimitive(receipt.transaction.currency.name))
             put("description", JsonPrimitive(receipt.transaction.description.value))
         }
     }
+}
+
+class CancelCashFlowSettlementTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "cancel_cash_flow_settlement",
+        description = "Estorna uma liquidação incorreta sem apagar o histórico e devolve a ocorrência ao estado pendente.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "settlementId" to stringParameter("Identificador retornado pelas consultas de fluxo de caixa."),
+                "reason" to stringParameter("Motivo obrigatório e objetivo do estorno."),
+            ),
+            required = setOf("settlementId", "reason"),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val creation = service.cancelCashFlowSettlement(
+            context.financialContext,
+            arguments.requiredUuid("settlementId"),
+            CancelCashFlowSettlementCommand(arguments.requiredString("reason")),
+        ).requiredValue()
+        val settlement = creation.value.settlement
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("cancelled", JsonPrimitive(creation.created))
+            put("status", JsonPrimitive(settlement.status.name))
+            put("settlementId", JsonPrimitive(settlement.id.toString()))
+            put("cashFlowEntryId", JsonPrimitive(settlement.cashFlowEntryId.toString()))
+            put("scheduledOn", JsonPrimitive(settlement.scheduledOn.toString()))
+            settlement.cancelledAt?.let { put("cancelledAt", JsonPrimitive(it.toString())) }
+            settlement.cancellationReason?.let { put("cancellationReason", JsonPrimitive(it)) }
+        }
+    }
+}
+
+class GetCashFlowSettlementsTool(
+    service: FinancialApplicationService,
+) : FinancialLocalTool(service) {
+    override val definition = AiToolDefinition(
+        name = "get_cash_flow_settlements",
+        description = "Consulta liquidações, estornos e divergências entre valores previstos e realizados.",
+        parameters = AiToolParameters(
+            properties = mapOf(
+                "settlementId" to stringParameter("ID exato; quando informado, consulta uma única liquidação."),
+                "from" to stringParameter("Início do período de vencimento em YYYY-MM-DD."),
+                "to" to stringParameter("Fim do período de vencimento em YYYY-MM-DD."),
+                "status" to stringParameter("Status opcional.", "ACTIVE", "CANCELLED"),
+            ),
+        ),
+    )
+
+    override suspend fun execute(context: ToolExecutionContext, arguments: JsonObject): JsonObject {
+        val settlementId = arguments.optionalString("settlementId")?.let(UUID::fromString)
+        val details = if (settlementId != null) {
+            listOf(service.getCashFlowSettlement(context.financialContext, settlementId).requiredValue())
+        } else {
+            val from = arguments.optionalString("from")?.let(LocalDate::parse)
+                ?: throw ToolRejectedException("from is required when settlementId is omitted")
+            val to = arguments.optionalString("to")?.let(LocalDate::parse)
+                ?: throw ToolRejectedException("to is required when settlementId is omitted")
+            val status = arguments.optionalString("status")?.let(CashFlowSettlementStatus::valueOf)
+            service.listCashFlowSettlements(
+                context.financialContext,
+                GetCashFlowSettlementsQuery(from, to, status),
+            ).requiredValue()
+        }
+        return buildJsonObject {
+            put("ok", JsonPrimitive(true))
+            put("count", JsonPrimitive(details.size))
+            put("settlements", buildJsonArray { details.forEach { add(it.toSettlementJson()) } })
+        }
+    }
+}
+
+private fun com.sova.finance.application.CashFlowSettlementDetails.toSettlementJson(): JsonObject = buildJsonObject {
+    val settlement = receipt.settlement
+    put("settlementId", JsonPrimitive(settlement.id.toString()))
+    put("cashFlowEntryId", JsonPrimitive(settlement.cashFlowEntryId.toString()))
+    put("transactionId", JsonPrimitive(settlement.transactionId.toString()))
+    put("scheduledOn", JsonPrimitive(settlement.scheduledOn.toString()))
+    put("paidOn", JsonPrimitive(receipt.transaction.occurredOn.toString()))
+    put("status", JsonPrimitive(settlement.status.name))
+    put("plannedAmount", moneyJson(plannedMoney.amount))
+    put("settledAmount", moneyJson(receipt.transaction.money.amount))
+    put("variance", moneyJson(variance))
+    put("description", JsonPrimitive(receipt.transaction.description.value))
+    settlement.note?.let { put("note", JsonPrimitive(it)) }
+    settlement.cancelledAt?.let { put("cancelledAt", JsonPrimitive(it.toString())) }
+    settlement.cancellationReason?.let { put("cancellationReason", JsonPrimitive(it)) }
 }
 
 class GetCashFlowProjectionTool(

@@ -44,6 +44,7 @@ class PostgresSettlementReceiptRepository(
                   ON app_user.id = ? AND app_user.household_id = settlement.household_id AND app_user.active
                 WHERE settlement.id = ?
                   AND settlement.household_id = ?
+                  AND settlement.status = 'ACTIVE'
                   AND attachment.media_type = 'IMAGE'
                   AND attachment.status = 'PROCESSED'
                   AND attachment.storage_key IS NOT NULL

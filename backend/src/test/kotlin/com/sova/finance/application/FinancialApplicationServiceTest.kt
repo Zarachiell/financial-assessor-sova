@@ -6,6 +6,7 @@ import com.sova.finance.domain.AccountType
 import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.CashFlowSettlementReceipt
+import com.sova.finance.domain.CashFlowSettlementStatus
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.FinancialContext
@@ -431,7 +432,7 @@ class FinancialApplicationServiceTest {
 
     @Test
     fun `settles one planned occurrence once and removes it from future projection`() = runBlocking {
-        val repository = InMemoryFinancialRepository(setOf(context))
+        val repository = InMemoryFinancialRepository(setOf(context, otherContext))
         val service = service(repository)
         val account = service.createAccount(
             context,
@@ -469,6 +470,8 @@ class FinancialApplicationServiceTest {
         val command = SettleCashFlowOccurrenceCommand(
             scheduledOn = LocalDate.parse("2026-09-10"),
             paidOn = LocalDate.parse("2026-08-24"),
+            settledMoney = Money.of(BigDecimal("325.00")),
+            note = "Valor reajustado",
         )
         val first = service.settleCashFlowOccurrence(context, entry.id, command).creation()
         val duplicate = service.settleCashFlowOccurrence(context, entry.id, command).creation()
@@ -479,7 +482,13 @@ class FinancialApplicationServiceTest {
         assertEquals(FinancialSource.CASH_FLOW_SETTLEMENT, first.value.transaction.source)
         assertEquals(LocalDate.parse("2026-08-24"), first.value.transaction.occurredOn)
         assertEquals(userId, first.value.settlement.settledByUserId)
+        assertEquals("Valor reajustado", first.value.settlement.note)
+        assertEquals(BigDecimal("325.00"), first.value.transaction.money.amount)
         assertEquals(1, repository.transactions.size)
+
+        val settlementDetails = service.getCashFlowSettlement(context, first.value.settlement.id).value()
+        assertEquals(BigDecimal("300.00"), settlementDetails.plannedMoney.amount)
+        assertEquals(BigDecimal("25.00"), settlementDetails.variance)
 
         val paid = service.getCashFlowOccurrences(
             context,
@@ -495,9 +504,9 @@ class FinancialApplicationServiceTest {
             context,
             GetCashFlowProjectionQuery(LocalDate.parse("2026-09-30")),
         ).value()
-        assertEquals(BigDecimal("-300.00"), projection.currentBalance)
+        assertEquals(BigDecimal("-325.00"), projection.currentBalance)
         assertEquals(BigDecimal("0.00"), projection.expectedExpenses)
-        assertEquals(BigDecimal("-300.00"), projection.projectedBalance)
+        assertEquals(BigDecimal("-325.00"), projection.projectedBalance)
         assertRejected(
             FinancialRejection.CASH_FLOW_ENTRY_HAS_SETTLEMENTS,
             service.deleteCashFlowEntry(context, entry.id),
@@ -514,6 +523,53 @@ class FinancialApplicationServiceTest {
                 command.copy(scheduledOn = LocalDate.parse("2026-10-10"), paidOn = LocalDate.parse("2026-08-25")),
             ),
         )
+
+        assertRejected(
+            FinancialRejection.CASH_FLOW_SETTLEMENT_NOT_FOUND,
+            service.cancelCashFlowSettlement(
+                otherContext,
+                first.value.settlement.id,
+                CancelCashFlowSettlementCommand("Tentativa cruzada"),
+            ),
+        )
+        val cancellation = service.cancelCashFlowSettlement(
+            context,
+            first.value.settlement.id,
+            CancelCashFlowSettlementCommand("Pagamento lançado incorretamente"),
+        ).creation()
+        val repeatedCancellation = service.cancelCashFlowSettlement(
+            context,
+            first.value.settlement.id,
+            CancelCashFlowSettlementCommand("Repetição"),
+        ).creation()
+        assertTrue(cancellation.created)
+        assertFalse(repeatedCancellation.created)
+        assertEquals(CashFlowSettlementStatus.CANCELLED, cancellation.value.settlement.status)
+        assertEquals("Pagamento lançado incorretamente", cancellation.value.settlement.cancellationReason)
+
+        val pendingAgain = service.getCashFlowOccurrences(
+            context,
+            GetCashFlowOccurrencesQuery(
+                from = LocalDate.parse("2026-09-01"),
+                to = LocalDate.parse("2026-09-30"),
+                status = CashFlowOccurrenceStatus.PENDING,
+            ),
+        ).value()
+        assertEquals(listOf(LocalDate.parse("2026-09-10")), pendingAgain.map { it.scheduledOn })
+        val afterCancellation = service.getCashFlowProjection(
+            context,
+            GetCashFlowProjectionQuery(LocalDate.parse("2026-09-30")),
+        ).value()
+        assertEquals(BigDecimal("0.00"), afterCancellation.currentBalance)
+        assertEquals(BigDecimal("300.00"), afterCancellation.expectedExpenses)
+        assertEquals(CashFlowSettlementStatus.CANCELLED, service.listCashFlowSettlements(
+            context,
+            GetCashFlowSettlementsQuery(
+                LocalDate.parse("2026-09-01"),
+                LocalDate.parse("2026-09-30"),
+                CashFlowSettlementStatus.CANCELLED,
+            ),
+        ).value().single().receipt.settlement.status)
     }
 
     private fun service(repository: InMemoryFinancialRepository): FinancialApplicationService {
@@ -572,6 +628,7 @@ private class InMemoryFinancialRepository(
     val transactions = linkedMapOf<UUID, Transaction>()
     val cashFlowEntries = linkedMapOf<UUID, CashFlowEntry>()
     val cashFlowSettlements = linkedMapOf<Pair<UUID, LocalDate>, CashFlowSettlementReceipt>()
+    val cashFlowSettlementHistory = mutableListOf<CashFlowSettlementReceipt>()
 
     override suspend fun isActiveMember(context: FinancialContext): Boolean = context in activeContexts
 
@@ -746,6 +803,13 @@ private class InMemoryFinancialRepository(
     ): CashFlowSettlementReceipt? = cashFlowSettlements[entryId to scheduledOn]
         ?.takeIf { it.settlement.householdId == householdId }
 
+    override suspend fun findCashFlowSettlementById(
+        householdId: UUID,
+        settlementId: UUID,
+    ): CashFlowSettlementReceipt? = cashFlowSettlementHistory.singleOrNull {
+        it.settlement.householdId == householdId && it.settlement.id == settlementId
+    }
+
     override suspend fun listCashFlowSettlements(
         householdId: UUID,
         from: LocalDate,
@@ -756,8 +820,18 @@ private class InMemoryFinancialRepository(
             !it.settlement.scheduledOn.isAfter(to)
     }
 
+    override suspend fun listCashFlowSettlementHistory(
+        householdId: UUID,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<CashFlowSettlementReceipt> = cashFlowSettlementHistory.filter {
+        it.settlement.householdId == householdId &&
+            !it.settlement.scheduledOn.isBefore(from) &&
+            !it.settlement.scheduledOn.isAfter(to)
+    }
+
     override suspend fun hasCashFlowSettlements(householdId: UUID, entryId: UUID): Boolean =
-        cashFlowSettlements.values.any {
+        cashFlowSettlementHistory.any {
             it.settlement.householdId == householdId && it.settlement.cashFlowEntryId == entryId
         }
 
@@ -766,6 +840,41 @@ private class InMemoryFinancialRepository(
         if (cashFlowSettlements.containsKey(key)) return false
         if (!insertTransaction(receipt.transaction)) return false
         cashFlowSettlements[key] = receipt
+        cashFlowSettlementHistory += receipt
+        return true
+    }
+
+    override suspend fun cancelCashFlowSettlement(
+        householdId: UUID,
+        settlementId: UUID,
+        cancelledByUserId: UUID,
+        cancelledAt: Instant,
+        reason: String,
+    ): Boolean {
+        val index = cashFlowSettlementHistory.indexOfFirst {
+            it.settlement.householdId == householdId &&
+                it.settlement.id == settlementId &&
+                it.settlement.status == CashFlowSettlementStatus.ACTIVE
+        }
+        if (index < 0) return false
+        val current = cashFlowSettlementHistory[index]
+        val cancelled = current.copy(
+            settlement = current.settlement.copy(
+                status = CashFlowSettlementStatus.CANCELLED,
+                cancelledAt = cancelledAt,
+                cancelledByUserId = cancelledByUserId,
+                cancellationReason = reason,
+            ),
+            transaction = current.transaction.copy(
+                deletedAt = cancelledAt,
+                deletedByUserId = cancelledByUserId,
+                updatedAt = cancelledAt,
+                updatedByUserId = cancelledByUserId,
+            ),
+        )
+        cashFlowSettlementHistory[index] = cancelled
+        cashFlowSettlements.remove(current.settlement.cashFlowEntryId to current.settlement.scheduledOn)
+        transactions[current.transaction.id] = cancelled.transaction
         return true
     }
 }

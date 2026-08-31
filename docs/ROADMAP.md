@@ -299,6 +299,20 @@ o comprovante documenta uma liquidação; ele não cria, altera ou quita uma oco
 
 ---
 
+## Fase 7.6 — Liquidação avançada do fluxo de caixa planejado
+Estado: concluída em 30/08/2026. Detalhes em `docs/phases/07.6-cash-flow-settlements.md`.
+
+Entregáveis:
+- valor realizado e variância frente ao previsto
+- observação auditável da liquidação
+- cancelamento/estorno lógico com motivo e autoria
+- histórico de liquidações ativas e canceladas
+- resolução determinística de candidatos por descrição e valor
+- idempotência e unicidade concorrente da liquidação ativa
+- retorno da ocorrência cancelada às pendências e projeções
+
+---
+
 ## Fase 8 — Importação de extratos
 Objetivo: importar dados em lote com revisão.
 

@@ -15,6 +15,9 @@ import com.sova.whatsapp.application.ProvisionedWhatsappUser
 import com.sova.whatsapp.domain.WhatsappAddress
 import com.sova.whatsapp.infrastructure.persistence.PostgresWhatsappRepository
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -427,7 +430,7 @@ class FinancialToolsIntegrationTest {
 
             val settled = fixture.dispatch(
                 "settle_cash_flow_occurrence",
-                """{"cashFlowEntryId":"$entryId","scheduledOn":"2026-08-30","paidOn":"2026-08-25"}""",
+                """{"cashFlowEntryId":"$entryId","scheduledOn":"2026-08-30","paidOn":"2026-08-25","settledAmount":110,"note":"valor real"}""",
                 fixture.userB,
                 "SM-SETTLE",
             ).json()
@@ -440,6 +443,18 @@ class FinancialToolsIntegrationTest {
             assertTrue(settled.getValue("created").jsonPrimitive.boolean)
             assertFalse(duplicate.getValue("created").jsonPrimitive.boolean)
             assertEquals("PAID", settled.getValue("status").jsonPrimitive.content)
+            assertEquals(BigDecimal("100.00"), settled.getValue("plannedAmount").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("10.00"), settled.getValue("variance").jsonPrimitive.content.toBigDecimal())
+
+            val settlementId = settled.getValue("settlementId").jsonPrimitive.content
+            val settlementHistory = fixture.dispatch(
+                "get_cash_flow_settlements",
+                """{"settlementId":"$settlementId"}""",
+                fixture.userA,
+                "SM-SETTLEMENT-HISTORY",
+            ).json().getValue("settlements").jsonArray.single().jsonObject
+            assertEquals("ACTIVE", settlementHistory.getValue("status").jsonPrimitive.content)
+            assertEquals(BigDecimal("110.00"), settlementHistory.getValue("settledAmount").jsonPrimitive.content.toBigDecimal())
 
             val paid = fixture.dispatch(
                 "get_cash_flow_entries",
@@ -456,7 +471,87 @@ class FinancialToolsIntegrationTest {
                 "SM-PROJECTION-AFTER-PAYMENT",
             ).json()
             assertEquals(BigDecimal("0.00"), projection.getValue("expectedExpenses").jsonPrimitive.content.toBigDecimal())
-            assertEquals(BigDecimal("-115.50"), projection.getValue("projectedBalance").jsonPrimitive.content.toBigDecimal())
+            assertEquals(BigDecimal("-125.50"), projection.getValue("projectedBalance").jsonPrimitive.content.toBigDecimal())
+
+            val cancelled = fixture.dispatch(
+                "cancel_cash_flow_settlement",
+                """{"settlementId":"$settlementId","reason":"pagamento lançado por engano"}""",
+                fixture.userB,
+                "SM-CANCEL-SETTLEMENT",
+            ).json()
+            val duplicateCancellation = fixture.dispatch(
+                "cancel_cash_flow_settlement",
+                """{"settlementId":"$settlementId","reason":"retry"}""",
+                fixture.userB,
+                "SM-CANCEL-SETTLEMENT-RETRY",
+            ).json()
+            assertTrue(cancelled.getValue("cancelled").jsonPrimitive.boolean)
+            assertFalse(duplicateCancellation.getValue("cancelled").jsonPrimitive.boolean)
+            assertEquals("CANCELLED", cancelled.getValue("status").jsonPrimitive.content)
+
+            val pendingAfterCancellation = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-08-25","to":"2026-08-31","status":"PENDING"}""",
+                fixture.userA,
+                "SM-PENDING-AFTER-CANCELLATION",
+            ).json()
+            assertEquals(entryId, pendingAfterCancellation.getValue("entries").jsonArray.single().jsonObject
+                .getValue("cashFlowEntryId").jsonPrimitive.content)
+            val cancelledHistory = fixture.dispatch(
+                "get_cash_flow_settlements",
+                """{"from":"2026-08-25","to":"2026-08-31","status":"CANCELLED"}""",
+                fixture.userA,
+                "SM-CANCELLED-HISTORY",
+            ).json().getValue("settlements").jsonArray.single().jsonObject
+            assertEquals("CANCELLED", cancelledHistory.getValue("status").jsonPrimitive.content)
+            assertEquals("pagamento lançado por engano", cancelledHistory
+                .getValue("cancellationReason").jsonPrimitive.content)
+
+            val concurrent = coroutineScope {
+                listOf("A", "B").map { suffix ->
+                    async {
+                        fixture.dispatch(
+                            "settle_cash_flow_occurrence",
+                            """{"cashFlowEntryId":"$entryId","scheduledOn":"2026-08-30","paidOn":"2026-08-25","settledAmount":105}""",
+                            fixture.userA,
+                            "SM-RESETTLE-$suffix",
+                        ).json()
+                    }
+                }.awaitAll()
+            }
+            assertEquals(1, concurrent.count { it.getValue("created").jsonPrimitive.boolean })
+            assertEquals(1, concurrent.count { !it.getValue("created").jsonPrimitive.boolean })
+            assertEquals(1, fixture.dispatch(
+                "get_cash_flow_settlements",
+                """{"from":"2026-08-25","to":"2026-08-31","status":"ACTIVE"}""",
+                fixture.userA,
+                "SM-ACTIVE-HISTORY",
+            ).json().getValue("count").jsonPrimitive.content.toInt())
+
+            fixture.dispatch(
+                "create_cash_flow_entry",
+                """
+                {
+                  "type":"EXPENSE",
+                  "amount":100,
+                  "description":"conta antecipada adicional",
+                  "recurrence":"ONCE",
+                  "startDate":"2026-08-30",
+                  "category":"Moradia",
+                  "account":"Conta principal"
+                }
+                """.trimIndent(),
+                fixture.userA,
+                "SM-AMBIGUOUS-PLANNED",
+            )
+            val candidates = fixture.dispatch(
+                "get_cash_flow_entries",
+                """{"from":"2026-08-30","to":"2026-08-30","description":"conta antecipada","amount":100}""",
+                fixture.userA,
+                "SM-AMBIGUOUS-CANDIDATES",
+            ).json()
+            assertEquals("AMBIGUOUS", candidates.getValue("candidateResolution").jsonPrimitive.content)
+            assertEquals(2, candidates.getValue("totalCount").jsonPrimitive.content.toInt())
         }
     }
 }

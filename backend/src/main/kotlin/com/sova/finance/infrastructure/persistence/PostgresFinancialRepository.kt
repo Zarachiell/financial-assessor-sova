@@ -10,6 +10,7 @@ import com.sova.finance.domain.CashFlowEntry
 import com.sova.finance.domain.CashFlowRecurrence
 import com.sova.finance.domain.CashFlowSettlement
 import com.sova.finance.domain.CashFlowSettlementReceipt
+import com.sova.finance.domain.CashFlowSettlementStatus
 import com.sova.finance.domain.Category
 import com.sova.finance.domain.CategoryName
 import com.sova.finance.domain.Currency
@@ -469,7 +470,7 @@ class PostgresFinancialRepository(
     ): CashFlowSettlementReceipt? = query { sql ->
         sql.fetchOne(
             settlementReceiptSelect(
-                "s.household_id = ? AND s.cash_flow_entry_id = ? AND s.scheduled_on = ?",
+                "s.household_id = ? AND s.cash_flow_entry_id = ? AND s.scheduled_on = ? AND s.status = 'ACTIVE'",
             ),
             householdId,
             entryId,
@@ -477,7 +478,34 @@ class PostgresFinancialRepository(
         )?.toCashFlowSettlementReceipt()
     }
 
+    override suspend fun findCashFlowSettlementById(
+        householdId: UUID,
+        settlementId: UUID,
+    ): CashFlowSettlementReceipt? = query { sql ->
+        sql.fetchOne(
+            settlementReceiptSelect("s.household_id = ? AND s.id = ?"),
+            householdId,
+            settlementId,
+        )?.toCashFlowSettlementReceipt()
+    }
+
     override suspend fun listCashFlowSettlements(
+        householdId: UUID,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<CashFlowSettlementReceipt> = query { sql ->
+        sql.fetch(
+            settlementReceiptSelect(
+                "s.household_id = ? AND s.status = 'ACTIVE' AND s.scheduled_on >= ? AND s.scheduled_on <= ? " +
+                    "ORDER BY s.scheduled_on, s.settled_at, s.id",
+            ),
+            householdId,
+            from,
+            to,
+        ).map { it.toCashFlowSettlementReceipt() }
+    }
+
+    override suspend fun listCashFlowSettlementHistory(
         householdId: UUID,
         from: LocalDate,
         to: LocalDate,
@@ -551,8 +579,8 @@ class PostgresFinancialRepository(
                         """
                         INSERT INTO cash_flow_settlements
                             (id, household_id, cash_flow_entry_id, scheduled_on, transaction_id,
-                             settled_by_user_id, settled_at)
-                        VALUES (?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))
+                             settled_by_user_id, settled_at, status, note)
+                        VALUES (?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ), ?, ?)
                         ON CONFLICT DO NOTHING
                         """.trimIndent(),
                         settlement.id,
@@ -562,6 +590,8 @@ class PostgresFinancialRepository(
                         settlement.transactionId,
                         settlement.settledByUserId,
                         settlement.settledAt.toString(),
+                        settlement.status.name,
+                        settlement.note,
                     ) == 1
                     if (!settlementInserted) throw SettlementConflictException()
                     true
@@ -570,6 +600,62 @@ class PostgresFinancialRepository(
                 false
             }
         }
+
+    override suspend fun cancelCashFlowSettlement(
+        householdId: UUID,
+        settlementId: UUID,
+        cancelledByUserId: UUID,
+        cancelledAt: Instant,
+        reason: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            database.inTransaction { connection ->
+                val sql = DSL.using(connection, SQLDialect.POSTGRES)
+                val transactionId = sql.fetchOne(
+                    """
+                    SELECT transaction_id
+                    FROM cash_flow_settlements
+                    WHERE household_id = ? AND id = ? AND status = 'ACTIVE'
+                    FOR UPDATE
+                    """.trimIndent(),
+                    householdId,
+                    settlementId,
+                )?.get("transaction_id", UUID::class.java) ?: return@inTransaction false
+                val transactionCancelled = sql.execute(
+                    """
+                    UPDATE transactions
+                    SET deleted_at = CAST(? AS TIMESTAMPTZ), deleted_by_user_id = ?,
+                        updated_at = CAST(? AS TIMESTAMPTZ), updated_by_user_id = ?
+                    WHERE household_id = ? AND id = ? AND deleted_at IS NULL
+                    """.trimIndent(),
+                    cancelledAt.toString(),
+                    cancelledByUserId,
+                    cancelledAt.toString(),
+                    cancelledByUserId,
+                    householdId,
+                    transactionId,
+                ) == 1
+                if (!transactionCancelled) return@inTransaction false
+                val settlementCancelled = sql.execute(
+                    """
+                    UPDATE cash_flow_settlements
+                    SET status = 'CANCELLED', cancelled_at = CAST(? AS TIMESTAMPTZ),
+                        cancelled_by_user_id = ?, cancellation_reason = ?
+                    WHERE household_id = ? AND id = ? AND status = 'ACTIVE'
+                    """.trimIndent(),
+                    cancelledAt.toString(),
+                    cancelledByUserId,
+                    reason,
+                    householdId,
+                    settlementId,
+                ) == 1
+                if (!settlementCancelled) throw SettlementCancellationConflictException()
+                true
+            }
+        } catch (_: SettlementCancellationConflictException) {
+            false
+        }
+    }
 
     private suspend fun <T> query(block: (DSLContext) -> T): T = withContext(Dispatchers.IO) {
         database.withConnection { connection -> block(DSL.using(connection, SQLDialect.POSTGRES)) }
@@ -654,6 +740,11 @@ private fun settlementReceiptSelect(whereClause: String): String =
         s.transaction_id AS settlement_transaction_id,
         s.settled_by_user_id AS settlement_user_id,
         s.settled_at AS settlement_at,
+        s.status AS settlement_status,
+        s.note AS settlement_note,
+        s.cancelled_at AS settlement_cancelled_at,
+        s.cancelled_by_user_id AS settlement_cancelled_by_user_id,
+        s.cancellation_reason AS settlement_cancellation_reason,
         t.id AS tx_id,
         t.household_id AS tx_household_id,
         t.created_by_user_id AS tx_created_by_user_id,
@@ -686,6 +777,11 @@ private fun Record.toCashFlowSettlementReceipt(): CashFlowSettlementReceipt {
         transactionId = required("settlement_transaction_id", UUID::class.java),
         settledByUserId = required("settlement_user_id", UUID::class.java),
         settledAt = required("settlement_at", OffsetDateTime::class.java).toInstant(),
+        status = CashFlowSettlementStatus.valueOf(required("settlement_status", String::class.java)),
+        note = get("settlement_note", String::class.java),
+        cancelledAt = get("settlement_cancelled_at", OffsetDateTime::class.java)?.toInstant(),
+        cancelledByUserId = get("settlement_cancelled_by_user_id", UUID::class.java),
+        cancellationReason = get("settlement_cancellation_reason", String::class.java),
     )
     val transaction = Transaction(
         id = required("tx_id", UUID::class.java),
@@ -713,3 +809,4 @@ private fun <T : Any> Record.required(field: String, type: Class<T>): T =
     requireNotNull(get(field, type)) { "Database field $field must not be null" }
 
 private class SettlementConflictException : RuntimeException()
+private class SettlementCancellationConflictException : RuntimeException()

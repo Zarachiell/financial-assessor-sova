@@ -20,6 +20,9 @@ Uma `CashFlowEntry` mensal representa uma série. Portanto, marcar toda a entrad
 - quitar uma ocorrência cria atomicamente uma `Transaction` com origem `CASH_FLOW_SETTLEMENT` e um `CashFlowSettlement` que registra vencimento, autor e instante da liquidação;
 - ocorrências liquidadas são excluídas das previsões futuras, enquanto a transação real passa a compor o saldo na data efetiva do pagamento ou recebimento;
 - entradas futuras com liquidações não podem ser editadas ou excluídas, evitando invalidar o histórico já realizado;
+- o valor realizado pode divergir do previsto e a variância é calculada deterministicamente sem alterar a previsão;
+- o estorno marca o settlement como `CANCELLED`, exclui logicamente sua transação na mesma transação PostgreSQL e devolve a ocorrência à projeção;
+- somente uma liquidação `ACTIVE` pode existir por ocorrência, preservando liquidações canceladas para auditoria;
 - IDs de registros financeiros só podem ser reutilizados pela IA quando retornados por tools locais de consulta e continuam scoped pelo household no backend.
 
 ## Alternativas consideradas
@@ -53,5 +56,5 @@ Adiada para a Fase 7.5. A liquidação criada agora será a âncora para o compr
 ### Negativas
 
 - o modelo passa a ter estados de atualização, exclusão e liquidação;
-- transações de liquidação exigirão futuramente um fluxo explícito de estorno, em vez de edição isolada;
-- anexos de comprovante ainda não são armazenados nesta fase.
+- estornos aumentam o histórico persistido e exigem consultas que distingam liquidações ativas e canceladas;
+- comprovantes vinculados permanecem como evidência histórica quando uma liquidação é cancelada.

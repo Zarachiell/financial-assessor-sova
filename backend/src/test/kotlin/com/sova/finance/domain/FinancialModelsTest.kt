@@ -116,4 +116,29 @@ class FinancialModelsTest {
             entry.copy(endDate = entry.startDate.minusDays(1))
         }
     }
+
+    @Test
+    fun `settlement status requires a complete auditable cancellation`() {
+        val settlement = CashFlowSettlement(
+            id = UUID.randomUUID(),
+            householdId = UUID.randomUUID(),
+            cashFlowEntryId = UUID.randomUUID(),
+            scheduledOn = LocalDate.parse("2026-08-30"),
+            transactionId = UUID.randomUUID(),
+            settledByUserId = UUID.randomUUID(),
+            settledAt = Instant.parse("2026-08-29T12:00:00Z"),
+        )
+        assertEquals(CashFlowSettlementStatus.ACTIVE, settlement.status)
+        assertFailsWith<IllegalArgumentException> {
+            settlement.copy(status = CashFlowSettlementStatus.CANCELLED)
+        }
+
+        val cancelled = settlement.copy(
+            status = CashFlowSettlementStatus.CANCELLED,
+            cancelledAt = Instant.parse("2026-08-30T12:00:00Z"),
+            cancelledByUserId = UUID.randomUUID(),
+            cancellationReason = "Pagamento incorreto",
+        )
+        assertEquals("Pagamento incorreto", cancelled.cancellationReason)
+    }
 }

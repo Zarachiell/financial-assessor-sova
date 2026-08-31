@@ -104,6 +104,8 @@ A Transaction e o CashFlowSettlement são persistidos na mesma transação Postg
 
 Após a análise de imagens, comprovantes são vinculados ao settlement por `SettlementReceipt`. O binário fica fora do PostgreSQL atrás da port `MediaStorage`; o banco mantém metadados, SHA-256 e relações compostas por household. A recuperação utiliza URL temporária assinada e nova verificação de integridade.
 
+Uma liquidação pode registrar valor realizado diferente do previsto. O estorno é lógico e atômico: `CashFlowSettlement` passa a `CANCELLED`, sua `Transaction` deixa de compor o saldo e a ocorrência volta a ser pendente. A previsão original e os comprovantes históricos não são apagados.
+
 ## Local Tool Calling
 
 Exemplo:
