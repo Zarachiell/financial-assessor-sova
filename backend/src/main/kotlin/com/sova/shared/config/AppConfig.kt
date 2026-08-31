@@ -73,9 +73,11 @@ data class AppConfig(
                     } ?: DEFAULT_IMAGE_MIN_CONFIDENCE,
                     storagePath = environment["SOVA_MEDIA_STORAGE_PATH"]?.takeIf(String::isNotBlank)
                         ?: DEFAULT_MEDIA_STORAGE_PATH,
-                    publicBaseUrl = environment["SOVA_PUBLIC_BASE_URL"]?.takeIf(String::isNotBlank)
-                        ?: environment["SOVA_ADDRESS"]?.takeIf(String::isNotBlank)
-                        ?: "http://localhost",
+                    publicBaseUrl = normalizePublicBaseUrl(
+                        environment["SOVA_PUBLIC_BASE_URL"]?.takeIf(String::isNotBlank)
+                            ?: environment["SOVA_ADDRESS"]?.takeIf(String::isNotBlank)
+                            ?: "http://localhost",
+                    ),
                     signingSecret = environment["SOVA_MEDIA_SIGNING_KEY"]?.takeIf(String::isNotBlank)
                         ?: environment.required("TWILIO_AUTH_TOKEN"),
                 ),
@@ -270,6 +272,21 @@ private fun Map<String, String>.requiredWhatsappAddress(name: String): String =
             "Environment variable $name must use the format whatsapp:+<E.164 number>"
         }
     }
+
+private fun normalizePublicBaseUrl(rawValue: String): String {
+    val value = rawValue.trim().trimEnd('/')
+    require('?' !in value && '#' !in value) {
+        "Media public base URL must not contain a query or fragment"
+    }
+    return when {
+        value.startsWith("https://", ignoreCase = true) -> value
+        value.equals("localhost", ignoreCase = true) ||
+            value.startsWith("localhost:", ignoreCase = true) -> "http://$value"
+        value.startsWith("http://localhost", ignoreCase = true) -> value
+        "://" !in value -> "https://$value"
+        else -> throw IllegalArgumentException("Media public base URL must use HTTPS outside localhost")
+    }
+}
 
 private val WHATSAPP_ADDRESS = Regex("^whatsapp:\\+[1-9]\\d{6,14}$")
 private const val DEFAULT_GOOGLE_CLOUD_LOCATION = "global"

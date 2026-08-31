@@ -155,6 +155,37 @@ class AppConfigTest {
     }
 
     @Test
+    fun `normalizes the Caddy production address as an HTTPS media URL`() {
+        val fromCaddyAddress = AppConfig.fromEnvironment(
+            requiredEnvironment + ("SOVA_ADDRESS" to "sova.example.com"),
+        )
+        val explicitPublicUrl = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "SOVA_ADDRESS" to "ignored.example.com",
+                "SOVA_PUBLIC_BASE_URL" to "https://media.example.com/",
+            ),
+        )
+
+        assertEquals("https://sova.example.com", fromCaddyAddress.image.publicBaseUrl)
+        assertEquals("https://media.example.com", explicitPublicUrl.image.publicBaseUrl)
+    }
+
+    @Test
+    fun `allows local HTTP media URLs and rejects external HTTP`() {
+        assertEquals(
+            "http://localhost:8080",
+            AppConfig.fromEnvironment(
+                requiredEnvironment + ("SOVA_PUBLIC_BASE_URL" to "localhost:8080/"),
+            ).image.publicBaseUrl,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(
+                requiredEnvironment + ("SOVA_PUBLIC_BASE_URL" to "http://sova.example.com"),
+            )
+        }
+    }
+
+    @Test
     fun `rejects malformed or out of range image confidence`() {
         assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(requiredEnvironment + ("SOVA_IMAGE_MIN_CONFIDENCE" to "high"))
