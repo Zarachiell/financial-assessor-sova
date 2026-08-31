@@ -7,6 +7,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ReceiptAccessLinkSignerTest {
@@ -35,5 +36,23 @@ class ReceiptAccessLinkSignerTest {
             Clock.fixed(Instant.parse("2026-08-30T12:11:00Z"), ZoneOffset.UTC),
         )
         assertFalse(expiredSigner.verify(receiptId, expires, signature))
+    }
+
+    @Test
+    fun `allows HTTP for an IP address but not for an external hostname`() {
+        val signer = ReceiptAccessLinkSigner(
+            "http://2.28.2.205",
+            "a-secure-test-key-with-enough-length",
+            clock = clock,
+        )
+
+        assertTrue(signer.create(receiptId).startsWith("http://2.28.2.205/media/receipts/$receiptId"))
+        assertFailsWith<IllegalArgumentException> {
+            ReceiptAccessLinkSigner(
+                "http://sova.example.com",
+                "a-secure-test-key-with-enough-length",
+                clock = clock,
+            )
+        }
     }
 }

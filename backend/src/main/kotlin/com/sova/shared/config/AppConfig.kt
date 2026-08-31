@@ -2,6 +2,7 @@ package com.sova.shared.config
 
 import com.sova.whatsapp.domain.WhatsappAddress
 import java.math.BigDecimal
+import java.net.URI
 
 data class AppConfig(
     val http: HttpConfig,
@@ -282,9 +283,21 @@ private fun normalizePublicBaseUrl(rawValue: String): String {
         value.startsWith("https://", ignoreCase = true) -> value
         value.equals("localhost", ignoreCase = true) ||
             value.startsWith("localhost:", ignoreCase = true) -> "http://$value"
-        value.startsWith("http://localhost", ignoreCase = true) -> value
+        value.startsWith("http://", ignoreCase = true) && value.hasLocalOrIpHost() -> value
         "://" !in value -> "https://$value"
-        else -> throw IllegalArgumentException("Media public base URL must use HTTPS outside localhost")
+        else -> throw IllegalArgumentException("Media public base URL must use HTTPS outside localhost or an IP address")
+    }
+}
+
+private fun String.hasLocalOrIpHost(): Boolean {
+    val host = runCatching { URI(this).host }.getOrNull() ?: return false
+    return host.equals("localhost", ignoreCase = true) || host.isIpv4Literal()
+}
+
+private fun String.isIpv4Literal(): Boolean {
+    val octets = split('.')
+    return octets.size == 4 && octets.all { octet ->
+        octet.isNotEmpty() && octet.all(Char::isDigit) && octet.toIntOrNull() in 0..255
     }
 }
 

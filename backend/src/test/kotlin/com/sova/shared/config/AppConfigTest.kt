@@ -171,11 +171,17 @@ class AppConfigTest {
     }
 
     @Test
-    fun `allows local HTTP media URLs and rejects external HTTP`() {
+    fun `allows local and IP HTTP media URLs and rejects hostname HTTP`() {
         assertEquals(
             "http://localhost:8080",
             AppConfig.fromEnvironment(
                 requiredEnvironment + ("SOVA_PUBLIC_BASE_URL" to "localhost:8080/"),
+            ).image.publicBaseUrl,
+        )
+        assertEquals(
+            "http://2.28.2.205",
+            AppConfig.fromEnvironment(
+                requiredEnvironment + ("SOVA_PUBLIC_BASE_URL" to "http://2.28.2.205"),
             ).image.publicBaseUrl,
         )
         assertFailsWith<IllegalArgumentException> {

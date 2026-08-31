@@ -5,6 +5,7 @@ import com.sova.media.application.MediaStorage
 import com.sova.media.application.StoredMediaContent
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.net.URI
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -78,8 +79,8 @@ class ReceiptAccessLinkSigner(
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val publicBaseUrl = publicBaseUrl.trimEnd('/').also {
-        require(it.startsWith("https://") || it.startsWith("http://localhost")) {
-            "Receipt public base URL must use HTTPS outside localhost"
+        require(it.isAllowedReceiptPublicUrl()) {
+            "Receipt public base URL must use HTTPS outside localhost or an IP address"
         }
         require('?' !in it && '#' !in it) { "Receipt public base URL must not contain a query or fragment" }
     }
@@ -115,6 +116,21 @@ class ReceiptAccessLinkSigner(
 
     private companion object {
         const val HMAC_ALGORITHM = "HmacSHA256"
+    }
+}
+
+private fun String.isAllowedReceiptPublicUrl(): Boolean {
+    val uri = runCatching { URI(this) }.getOrNull() ?: return false
+    if (uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) return true
+    if (!uri.scheme.equals("http", ignoreCase = true)) return false
+    val host = uri.host ?: return false
+    return host.equals("localhost", ignoreCase = true) || host.isIpv4Literal()
+}
+
+private fun String.isIpv4Literal(): Boolean {
+    val octets = split('.')
+    return octets.size == 4 && octets.all { octet ->
+        octet.isNotEmpty() && octet.all(Char::isDigit) && octet.toIntOrNull() in 0..255
     }
 }
 
