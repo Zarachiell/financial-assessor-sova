@@ -23,9 +23,28 @@ jobs:
       - name: Test and package
         run: bash ./gradlew test buildFatJar
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install, test and build
+        run: |
+          npm ci
+          npm run lint
+          npm run test
+          npm run build
+
   compose-smoke:
     runs-on: ubuntu-latest
-    needs: backend
+    needs: [backend, frontend]
     env:
       COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
     steps:
@@ -53,6 +72,8 @@ jobs:
         run: docker compose up --detach --build --wait
       - name: Verify API through Caddy
         run: curl --fail --show-error http://localhost:8080/health
+      - name: Verify dashboard through Caddy
+        run: curl --fail --show-error http://localhost:8080/ | grep --quiet 'Sova'
       - name: Verify signed Twilio webhook security through Caddy
         shell: bash
         run: |

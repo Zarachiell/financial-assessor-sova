@@ -86,7 +86,7 @@ DATABASE_PASSWORD=<senha-forte>
 
 SOVA_HTTP_PORT=80
 SOVA_HTTPS_PORT=8443
-SOVA_ADDRESS=http://<ip-publico>
+SOVA_ADDRESS=http://2.28.2.205
 
 TWILIO_ACCOUNT_SID=<account-sid>
 TWILIO_AUTH_TOKEN=<auth-token>
@@ -97,6 +97,10 @@ SOVA_USER_A_NAME=<nome>
 SOVA_USER_A_WHATSAPP=whatsapp:+55<ddd><numero>
 SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
+
+SOVA_USER_A_DASHBOARD_PASSWORD=<senha-forte-com-12-ou-mais-caracteres>
+SOVA_USER_B_DASHBOARD_PASSWORD=<senha-forte-com-12-ou-mais-caracteres>
+SOVA_DASHBOARD_SESSION_KEY=<segredo-aleatorio-com-32-ou-mais-caracteres>
 
 AI_PROVIDER=gemini
 GOOGLE_CLOUD_PROJECT=sova-506801
@@ -120,7 +124,7 @@ stat -c '%U %G %a %n' /opt/sova/shared/.env
 stat -c '%U %G %a %n' /opt/sova/secrets/google-service-account.json
 ```
 
-O endereço HTTP por IP permite a validação inicial do canal real, mas não atende ao requisito de HTTPS definido em `SPEC.md`. Antes de trafegar informações financeiras reais, configure HTTPS.
+O deploy atual usa diretamente `http://2.28.2.205`, sem depender de domínio. Essa topologia também gera os links temporários de comprovantes. Como HTTP não cifra credenciais, cookies ou dados financeiros em trânsito, restrinja o acesso à VPS e migre para uma camada segura, como VPN privada ou HTTPS, antes de expor o dashboard fora de uma rede confiável.
 
 ## 4. Cadastrar o host SSH no GitHub
 
@@ -178,7 +182,7 @@ Faça push para `main` ou abra `Actions -> Deploy production -> Run workflow` e 
 Depois do deploy, valide:
 
 ```bash
-curl http://<ip-publico>/health
+curl http://2.28.2.205/health
 ```
 
 Resposta esperada:
@@ -190,8 +194,10 @@ Resposta esperada:
 Na Twilio, configure o webhook inbound como:
 
 ```text
-POST http://<ip-publico>/webhooks/twilio/whatsapp
+POST http://2.28.2.205/webhooks/twilio/whatsapp
 ```
+
+O dashboard fica em `http://2.28.2.205/`. Ele só é habilitado quando as duas senhas e a chave de sessão estiverem configuradas. A API permanece em `/api/dashboard/*` e deriva o household do cookie assinado, nunca de parâmetros enviados pelo navegador.
 
 ## Diagnóstico e recuperação
 

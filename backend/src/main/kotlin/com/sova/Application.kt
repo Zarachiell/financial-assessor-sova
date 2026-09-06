@@ -17,6 +17,10 @@ import com.sova.conversation.infrastructure.persistence.PostgresConversationHist
 import com.sova.delivery.http.WhatsappHttpDependencies
 import com.sova.delivery.http.ReceiptMediaHttpDependencies
 import com.sova.delivery.http.configureHttp
+import com.sova.delivery.http.DashboardHttpDependencies
+import com.sova.dashboard.application.DashboardQueryService
+import com.sova.dashboard.application.DashboardSessionAuthenticator
+import com.sova.dashboard.application.DashboardUser
 import com.sova.finance.application.DefaultFinancialCatalogProvisioner
 import com.sova.finance.application.DefaultFinancialCatalog
 import com.sova.finance.application.FinancialApplicationService
@@ -101,6 +105,28 @@ fun main() {
             config.image.publicBaseUrl,
             config.image.signingSecret,
         )
+        val dashboard = config.dashboard.userPasswords?.let { passwords ->
+            val sessionDuration = Duration.ofHours(config.dashboard.sessionDurationHours.toLong())
+            DashboardHttpDependencies(
+                authenticator = DashboardSessionAuthenticator(
+                    users = authorizedUsers.mapIndexed { index, user ->
+                        DashboardUser(
+                            name = config.household.users[index].name,
+                            context = FinancialContext(user.householdId, user.userId),
+                            password = passwords[index],
+                        )
+                    },
+                    signingSecret = requireNotNull(config.dashboard.sessionSigningKey),
+                    sessionDuration = sessionDuration,
+                ),
+                queries = DashboardQueryService(financialService),
+                financialService = financialService,
+                sessionDuration = sessionDuration,
+                secureCookies = config.image.publicBaseUrl.startsWith("https://", ignoreCase = true),
+                receiptService = settlementReceiptService,
+                receiptLinkSigner = receiptLinkSigner,
+            )
+        }
         val toolRegistry = LocalToolRegistry(
             financialLocalTools(financialService, financialInsightsService, imageCandidateService) +
                 receiptLocalTools(settlementReceiptService, receiptLinkSigner),
@@ -191,7 +217,7 @@ fun main() {
                         host = config.http.host,
                         port = config.http.port,
                     ) {
-                        module(database, whatsapp, receiptMedia)
+                        module(database, whatsapp, receiptMedia, dashboard)
                     }.start(wait = true)
                 } finally {
                     imageWorker.close()
@@ -216,6 +242,7 @@ fun Application.module(
     database: DatabaseHealth,
     whatsapp: WhatsappHttpDependencies? = null,
     receiptMedia: ReceiptMediaHttpDependencies? = null,
+    dashboard: DashboardHttpDependencies? = null,
 ) {
-    configureHttp(database, whatsapp, receiptMedia)
+    configureHttp(database, whatsapp, receiptMedia, dashboard)
 }

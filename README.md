@@ -155,11 +155,12 @@ Hetzner CX23
 x86
 ```
 
-Containers iniciais:
+Containers da aplicação:
 
 ```text
 caddy
 sova-api
+sova-web
 postgres
 ```
 
@@ -193,6 +194,9 @@ MAX_TOOL_ITERATIONS
 SOVA_MAX_AUDIO_BYTES
 SOVA_MAX_AUDIO_DURATION_MINUTES
 SOVA_AUDIO_MAX_ATTEMPTS
+SOVA_USER_A_DASHBOARD_PASSWORD
+SOVA_USER_B_DASHBOARD_PASSWORD
+SOVA_DASHBOARD_SESSION_KEY
 ```
 
 O repositório deverá possuir apenas `.env.example`.
@@ -236,10 +240,10 @@ docker compose down
 Copie `.env.example` para `.env` quando precisar alterar os padrões. Não versione `.env`. Em produção:
 
 - use uma senha forte em `DATABASE_PASSWORD`;
-- configure `SOVA_ADDRESS` com o domínio público;
+- configure `SOVA_ADDRESS=http://2.28.2.205` para a VPS atual, que não utiliza domínio;
 - substitua todas as configurações locais da Twilio e dos dois usuários;
 - configure `AI_PROVIDER=gemini`, projeto/localização/modelos Google e ADC;
-- exponha `SOVA_HTTP_PORT=80` e `SOVA_HTTPS_PORT=443` para o Caddy emitir e renovar certificados HTTPS automaticamente.
+- exponha `SOVA_HTTP_PORT=80`; com `SOVA_ADDRESS=http://2.28.2.205`, o Caddy atende diretamente pelo IP sem tentar emitir certificado para um domínio inexistente.
 
 ### WhatsApp / Twilio
 
@@ -252,7 +256,7 @@ Para identidades móveis brasileiras, o lookup trata os formatos com e sem o non
 Configure na Twilio o webhook:
 
 ```text
-POST https://<seu-dominio>/webhooks/twilio/whatsapp
+POST http://2.28.2.205/webhooks/twilio/whatsapp
 ```
 
 O endpoint exige `application/x-www-form-urlencoded`, valida `X-Twilio-Signature` e aceita somente as duas identidades ativas. Os valores padrão do Compose são fictícios e existem apenas para que a stack local inicialize; eles não enviam mensagens reais.
@@ -281,14 +285,10 @@ O artefato executável é gerado em `backend/build/libs/sova-api.jar`.
 
 ### CI e deploy
 
-O workflow em `.github/workflows/ci.yml` executa os testes com JDK 21, gera o fat JAR e sobe os três containers para validar o endpoint de saúde através do Caddy.
+O workflow em `.github/workflows/ci.yml` testa backend e frontend, gera os artefatos e sobe a stack completa para validar a API e o dashboard através do Caddy.
 
 Depois de um CI bem-sucedido para um push na `main`, `.github/workflows/deploy.yml` envia exatamente o commit aprovado para a VPS e ativa uma nova release com Docker Compose. O bootstrap da VPS, as variáveis e os secrets necessários estão descritos em [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Status
 
-Fase 5.5 — gestão de registros e liquidação implementada. Além dos insights da Fase 5, o Sova corrige e exclui
-logicamente transações, registra várias despesas na mesma mensagem, detalha ocorrências futuras pendentes/pagas e
-quita cada ocorrência de forma idempotente. A quitação cria atomicamente a transação real e deixa de contar a
-previsão como pendente. Autoria, isolamento por household, migration V7 e fluxos Gemini/local tool calling possuem
-cobertura automatizada sem chamadas reais ao Gemini ou à Twilio.
+Fase 8 — dashboard financeiro implementado. O Sova possui uma interface web autenticada e integralmente escura para visão patrimonial, dinheiro livre, investimentos, dívidas, previsto x realizado, timeline financeira, recorrências, liquidações e comprovantes. A API permite criar, editar e excluir transações e entradas de fluxo de caixa mantendo autoria e isolamento por household. O WhatsApp e o dashboard continuam usando os mesmos casos de uso e o PostgreSQL permanece como única fonte da verdade financeira.

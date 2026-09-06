@@ -13,6 +13,7 @@ data class AppConfig(
     val cashFlow: CashFlowConfig,
     val audio: AudioConfig,
     val image: ImageConfig,
+    val dashboard: DashboardConfig,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig =
@@ -82,6 +83,7 @@ data class AppConfig(
                     signingSecret = environment["SOVA_MEDIA_SIGNING_KEY"]?.takeIf(String::isNotBlank)
                         ?: environment.required("TWILIO_AUTH_TOKEN"),
                 ),
+                dashboard = environment.dashboardConfig(),
             )
 
         private const val DEFAULT_MAX_PROJECTION_MONTHS = 24
@@ -205,6 +207,35 @@ data class ImageConfig(
     }
 }
 
+data class DashboardConfig(
+    val userPasswords: List<String>?,
+    val sessionSigningKey: String?,
+    val sessionDurationHours: Int,
+) {
+    val enabled: Boolean = userPasswords != null
+
+    init {
+        require(userPasswords == null || userPasswords.size == 2) {
+            "Dashboard credentials must be configured for exactly two users"
+        }
+        require(userPasswords == null || userPasswords.all { it.length >= MIN_PASSWORD_LENGTH }) {
+            "Dashboard passwords must have at least $MIN_PASSWORD_LENGTH characters"
+        }
+        require(!enabled || !sessionSigningKey.isNullOrBlank() && sessionSigningKey.length >= MIN_SIGNING_KEY_LENGTH) {
+            "Dashboard session signing key must have at least $MIN_SIGNING_KEY_LENGTH characters"
+        }
+        require(sessionDurationHours in 1..MAX_SESSION_HOURS) {
+            "Dashboard session duration must be between 1 and $MAX_SESSION_HOURS hours"
+        }
+    }
+
+    private companion object {
+        const val MIN_PASSWORD_LENGTH = 12
+        const val MIN_SIGNING_KEY_LENGTH = 32
+        const val MAX_SESSION_HOURS = 168
+    }
+}
+
 data class HouseholdProvisioningConfig(
     val name: String,
     val users: List<ProvisionedUserConfig>,
@@ -243,6 +274,21 @@ private fun Map<String, String>.aiConfig(): AiConfig {
             credentialsPath = required("GOOGLE_APPLICATION_CREDENTIALS"),
         ),
         maxToolIterations = optionalPositiveInt("MAX_TOOL_ITERATIONS") ?: DEFAULT_MAX_TOOL_ITERATIONS,
+    )
+}
+
+private fun Map<String, String>.dashboardConfig(): DashboardConfig {
+    val passwords = listOf(
+        get("SOVA_USER_A_DASHBOARD_PASSWORD")?.takeIf(String::isNotBlank),
+        get("SOVA_USER_B_DASHBOARD_PASSWORD")?.takeIf(String::isNotBlank),
+    )
+    require(passwords.all { it == null } || passwords.all { it != null }) {
+        "Dashboard passwords must be configured for both users or omitted for both"
+    }
+    return DashboardConfig(
+        userPasswords = passwords.takeIf { values -> values.all { it != null } }?.filterNotNull(),
+        sessionSigningKey = get("SOVA_DASHBOARD_SESSION_KEY")?.takeIf(String::isNotBlank),
+        sessionDurationHours = optionalPositiveInt("SOVA_DASHBOARD_SESSION_HOURS") ?: 24,
     )
 }
 

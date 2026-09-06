@@ -313,7 +313,51 @@ Entregáveis:
 
 ---
 
-## Fase 8 — Importação de extratos
+## Fase 8 — Dashboard
+Objetivo: interface web do household.
+
+Estado: implementada. Detalhes em `docs/phases/08-financial-dashboard.md`.
+
+Primeira versão:
+- autenticação
+- visão geral
+- saldo
+- receitas x despesas
+- categorias
+- transações
+- fluxo de caixa
+- financial insights
+- importações
+- cadastro manual
+
+Segunda versão:
+- chat com Sova
+- relatórios
+- filtros avançados
+- tendências
+
+Frontend:
+Next.js + TypeScript.
+
+---
+
+## Fase 9 — Insights financeiros proativos
+Objetivo: detectar situações financeiras relevantes por regras determinísticas e apresentá-las de forma explicável.
+
+Entregáveis:
+- motor determinístico de insights
+- evidências rastreáveis
+- severidade e priorização por regra
+- deduplicação e ciclo de vida
+- consulta pelo WhatsApp
+- visualização no dashboard
+- isolamento por household
+
+Detalhes em `docs/phases/09-financial-insights.md`.
+
+---
+
+## Fase 10 — Importação de extratos
 Objetivo: importar dados em lote com revisão.
 
 Prioridade:
@@ -339,33 +383,7 @@ nenhum item vira Transaction diretamente durante parsing.
 
 ---
 
-## Fase 9 — Dashboard
-Objetivo: interface web do household.
-
-Primeira versão:
-- autenticação
-- visão geral
-- saldo
-- receitas x despesas
-- categorias
-- transações
-- fluxo de caixa
-- financial insights
-- importações
-- cadastro manual
-
-Segunda versão:
-- chat com Sova
-- relatórios
-- filtros avançados
-- tendências
-
-Frontend:
-Next.js + TypeScript.
-
----
-
-## Fase 10 — Self-hosted AI
+## Fase 11 — Self-hosted AI
 Objetivo: aumentar privacidade e reduzir dependência externa.
 
 Entregáveis:

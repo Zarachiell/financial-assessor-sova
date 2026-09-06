@@ -61,6 +61,29 @@ class AppConfigTest {
     }
 
     @Test
+    fun `keeps dashboard disabled without credentials and validates complete secure credentials`() {
+        assertEquals(false, AppConfig.fromEnvironment(requiredEnvironment).dashboard.enabled)
+
+        val configured = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "SOVA_USER_A_DASHBOARD_PASSWORD" to "a-strong-password",
+                "SOVA_USER_B_DASHBOARD_PASSWORD" to "another-strong-password",
+                "SOVA_DASHBOARD_SESSION_KEY" to "a-session-signing-key-with-32-bytes",
+                "SOVA_DASHBOARD_SESSION_HOURS" to "48",
+            ),
+        ).dashboard
+
+        assertEquals(true, configured.enabled)
+        assertEquals(48, configured.sessionDurationHours)
+        assertEquals(2, configured.userPasswords?.size)
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(
+                requiredEnvironment + ("SOVA_USER_A_DASHBOARD_PASSWORD" to "a-strong-password"),
+            )
+        }
+    }
+
+    @Test
     fun `loads Gemini enterprise configuration without requiring Groq credentials`() {
         val config = AppConfig.fromEnvironment(requiredEnvironment)
         val settings = config.ai.settings

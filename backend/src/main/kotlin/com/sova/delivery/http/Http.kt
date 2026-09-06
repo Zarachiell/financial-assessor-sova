@@ -29,6 +29,7 @@ fun Application.configureHttp(
     database: DatabaseHealth,
     whatsapp: WhatsappHttpDependencies? = null,
     receiptMedia: ReceiptMediaHttpDependencies? = null,
+    dashboard: DashboardHttpDependencies? = null,
 ) {
     install(CallId) {
         retrieveFromHeader(HttpHeaders.XRequestId)
@@ -58,6 +59,13 @@ fun Application.configureHttp(
                 message = ErrorResponse(error = "WHATSAPP_PROVIDER_UNAVAILABLE"),
             )
         }
+        exception<IllegalArgumentException> { call, cause ->
+            call.application.environment.log.warn("Request validation failed", cause)
+            call.respond(
+                status = HttpStatusCode.BadRequest,
+                message = ErrorResponse(error = "INVALID_REQUEST"),
+            )
+        }
         exception<Throwable> { call, cause ->
             call.application.environment.log.error("Unexpected request failure", cause)
             call.respond(
@@ -82,6 +90,7 @@ fun Application.configureHttp(
 
         whatsapp?.let(::whatsappRoutes)
         receiptMedia?.let(::receiptMediaRoutes)
+        dashboard?.let(::dashboardRoutes)
     }
 }
 

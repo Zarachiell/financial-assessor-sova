@@ -10,5 +10,23 @@
 		format json
 	}
 
-	reverse_proxy sova-api:8080
+	handle /api/* {
+		reverse_proxy sova-api:8080
+	}
+
+	handle /webhooks/* {
+		reverse_proxy sova-api:8080
+	}
+
+	handle /media/* {
+		reverse_proxy sova-api:8080
+	}
+
+	handle /health* {
+		reverse_proxy sova-api:8080
+	}
+
+	handle {
+		reverse_proxy sova-web:3000
+	}
 }
