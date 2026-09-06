@@ -331,7 +331,7 @@ Primeira versão:
 - cadastro manual
 
 Segunda versão:
-- chat com Sova
+- [x] chat com Sova
 - relatórios
 - filtros avançados
 - tendências

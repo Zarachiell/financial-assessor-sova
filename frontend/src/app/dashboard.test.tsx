@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, Catalog, TimelineItem, Transaction } from "@/lib/api";
-import { brl, ConfirmDeleteDialog, DashboardSkeleton, ReceiptLinks, RecordsTable, TimelineView } from "./page";
+import { brl, ChatView, ConfirmDeleteDialog, DashboardSkeleton, ReceiptLinks, RecordsTable, TimelineView } from "./page";
 
 const catalog: Catalog = {
   accounts: [],
@@ -101,5 +101,18 @@ describe("dashboard financial presentation", () => {
     expect(screen.getByText("Mercado")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Excluir registro" }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("sends a text question and renders the shared Sova conversation", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(<ChatView messages={[{
+      id: "m1", exchangeId: "e1", role: "ASSISTANT", content: "Seu fluxo está positivo.",
+      createdAt: "2026-09-06T12:00:00Z",
+    }]} onSend={onSend} />);
+
+    expect(screen.getByText("Seu fluxo está positivo.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Mensagem para o Sova"), { target: { value: "Onde mais gastamos?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Onde mais gastamos?"));
   });
 });

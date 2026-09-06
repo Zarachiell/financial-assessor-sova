@@ -41,4 +41,17 @@ describe("dashboard API client", () => {
     expect(url).toContain("categoryId=category-1");
     expect(url).toContain("recurring=true");
   });
+
+  it("sends dashboard chat content without client supplied identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.sendChatMessage("Como estão minhas finanças?");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/dashboard/chat/messages");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ content: "Como estão minhas finanças?" });
+  });
 });

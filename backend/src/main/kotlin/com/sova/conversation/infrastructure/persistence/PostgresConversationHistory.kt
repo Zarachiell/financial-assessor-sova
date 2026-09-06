@@ -22,22 +22,31 @@ class PostgresConversationHistory(
         database.withConnection { connection ->
             DSL.using(connection, SQLDialect.POSTGRES).fetch(
                 """
-                SELECT direction, body
-                FROM whatsapp_messages
-                WHERE user_id = ? AND message_sid <> ?
-                ORDER BY received_at DESC, created_at DESC, id DESC
+                SELECT role, body
+                FROM (
+                    SELECT
+                        CASE direction WHEN 'INBOUND' THEN 'USER' ELSE 'ASSISTANT' END AS role,
+                        body,
+                        received_at AS happened_at,
+                        id AS sort_id
+                    FROM whatsapp_messages
+                    WHERE user_id = ? AND message_sid <> ?
+                    UNION ALL
+                    SELECT role, content AS body, created_at AS happened_at, id AS sort_id
+                    FROM dashboard_chat_messages
+                    WHERE user_id = ? AND exchange_id::text <> ?
+                ) AS conversation_history
+                ORDER BY happened_at DESC, sort_id DESC
                 LIMIT ?
                 """.trimIndent(),
+                userId,
+                excludingMessageSid,
                 userId,
                 excludingMessageSid,
                 limit,
             ).map { record ->
                 ConversationMessage(
-                    role = when (record.get("direction", String::class.java)) {
-                        "INBOUND" -> ConversationMessageRole.USER
-                        "OUTBOUND" -> ConversationMessageRole.ASSISTANT
-                        else -> error("Unsupported WhatsApp message direction")
-                    },
+                    role = ConversationMessageRole.valueOf(record.get("role", String::class.java)),
                     content = record.get("body", String::class.java).orEmpty(),
                 )
             }.asReversed()

@@ -19,8 +19,10 @@ import com.sova.delivery.http.ReceiptMediaHttpDependencies
 import com.sova.delivery.http.configureHttp
 import com.sova.delivery.http.DashboardHttpDependencies
 import com.sova.dashboard.application.DashboardQueryService
+import com.sova.dashboard.application.DashboardChatService
 import com.sova.dashboard.application.DashboardSessionAuthenticator
 import com.sova.dashboard.application.DashboardUser
+import com.sova.dashboard.infrastructure.persistence.PostgresDashboardChatRepository
 import com.sova.finance.application.DefaultFinancialCatalogProvisioner
 import com.sova.finance.application.DefaultFinancialCatalog
 import com.sova.finance.application.FinancialApplicationService
@@ -105,6 +107,21 @@ fun main() {
             config.image.publicBaseUrl,
             config.image.signingSecret,
         )
+        val toolRegistry = LocalToolRegistry(
+            financialLocalTools(financialService, financialInsightsService, imageCandidateService) +
+                receiptLocalTools(settlementReceiptService, receiptLinkSigner),
+        )
+        val conversation = AiConversationOrchestrator(
+            provider = provider,
+            registry = toolRegistry,
+            dispatcher = LocalToolDispatcher(toolRegistry),
+            history = PostgresConversationHistory(database),
+            familyRolesByUserId = mapOf(
+                authorizedUsers[0].userId to FamilyRole.FATHER,
+                authorizedUsers[1].userId to FamilyRole.MOTHER,
+            ),
+            maxToolRounds = config.ai.maxToolIterations,
+        )
         val dashboard = config.dashboard.userPasswords?.let { passwords ->
             val sessionDuration = Duration.ofHours(config.dashboard.sessionDurationHours.toLong())
             DashboardHttpDependencies(
@@ -125,23 +142,9 @@ fun main() {
                 secureCookies = config.image.publicBaseUrl.startsWith("https://", ignoreCase = true),
                 receiptService = settlementReceiptService,
                 receiptLinkSigner = receiptLinkSigner,
+                chatService = DashboardChatService(conversation, PostgresDashboardChatRepository(database)),
             )
         }
-        val toolRegistry = LocalToolRegistry(
-            financialLocalTools(financialService, financialInsightsService, imageCandidateService) +
-                receiptLocalTools(settlementReceiptService, receiptLinkSigner),
-        )
-        val conversation = AiConversationOrchestrator(
-            provider = provider,
-            registry = toolRegistry,
-            dispatcher = LocalToolDispatcher(toolRegistry),
-            history = PostgresConversationHistory(database),
-            familyRolesByUserId = mapOf(
-                authorizedUsers[0].userId to FamilyRole.FATHER,
-                authorizedUsers[1].userId to FamilyRole.MOTHER,
-            ),
-            maxToolRounds = config.ai.maxToolIterations,
-        )
         val sender = TwilioWhatsappMessageSender(senderAddress, config.twilio)
         val audioProcessingConfig = AudioProcessingConfig(
             maxAudioBytes = config.audio.maxAudioBytes,

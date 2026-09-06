@@ -586,9 +586,11 @@ Evitar logar dados financeiros em nível excessivo.
 
 ## Implementação concluída
 
-O dashboard foi implementado em Next.js e servido pelo mesmo Caddy da aplicação. Ele utiliza tema escuro responsivo e oferece visão geral, transações, timeline de fluxo de caixa, investimentos, recorrências, liquidações e comprovantes.
+O dashboard foi implementado em Next.js e servido pelo mesmo Caddy da aplicação. Ele utiliza tema escuro responsivo e oferece visão geral, transações, timeline de fluxo de caixa, investimentos, recorrências, liquidações, comprovantes e chat textual com o Sova.
 
 O backend expõe `/api/dashboard/*` com sessão assinada em cookie `HttpOnly`. O household e a autoria são derivados da sessão; IDs de household nunca são aceitos do navegador. Valores monetários são calculados com `BigDecimal` e serializados como strings decimais.
+
+O chat autenticado reutiliza o mesmo `AiConversationOrchestrator`, as mesmas tools locais e as mesmas validações financeiras do WhatsApp. As mensagens são persistidas por usuário, e o histórico recente é compartilhado entre dashboard e WhatsApp para manter continuidade de contexto sem permitir que o cliente escolha sua identidade.
 
 A visão patrimonial separa deterministicamente:
 
@@ -599,7 +601,7 @@ A visão patrimonial separa deterministicamente:
 
 A timeline consolidada distingue previsto e realizado e deriva no backend os estados `PENDING`, `SETTLED` e `OVERDUE`. Seus filtros de período, tipo, status, categoria e recorrência são enviados à API. Transações e entradas de fluxo de caixa possuem criação, edição e exclusão pelas mesmas regras de aplicação usadas pelo WhatsApp.
 
-Não foi necessária migration: o tipo de conta `INVESTMENT`, transações, fluxo de caixa, settlements e comprovantes já existiam no schema. O deploy adicionou apenas o container `sova-web` ao Compose e o roteamento correspondente no Caddy.
+A implementação inicial do dashboard não exigiu migration porque o tipo de conta `INVESTMENT`, transações, fluxo de caixa, settlements e comprovantes já existiam no schema. O chat adicionou a migration `V12__dashboard_chat.sql` para o histórico web. O deploy adicionou apenas o container `sova-web` ao Compose e o roteamento correspondente no Caddy.
 
 ---
 

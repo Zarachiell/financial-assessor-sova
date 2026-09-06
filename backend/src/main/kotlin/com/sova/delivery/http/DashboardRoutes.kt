@@ -1,5 +1,9 @@
 package com.sova.delivery.http
 
+import com.sova.ai.application.AiProviderException
+import com.sova.conversation.application.AiConversationException
+import com.sova.dashboard.application.DashboardChatMessage
+import com.sova.dashboard.application.DashboardChatService
 import com.sova.dashboard.application.DashboardPeriod
 import com.sova.dashboard.application.DashboardPrincipal
 import com.sova.dashboard.application.DashboardQueryRejected
@@ -62,6 +66,7 @@ data class DashboardHttpDependencies(
     val secureCookies: Boolean,
     val receiptService: SettlementReceiptService? = null,
     val receiptLinkSigner: ReceiptAccessLinkSigner? = null,
+    val chatService: DashboardChatService? = null,
 )
 
 fun Route.dashboardRoutes(dependencies: DashboardHttpDependencies) {
@@ -322,6 +327,34 @@ fun Route.dashboardRoutes(dependencies: DashboardHttpDependencies) {
                 },
             )
         }
+
+        get("/chat/messages") {
+            val principal = call.principal(dependencies) ?: return@get
+            val service = dependencies.chatService
+                ?: return@get call.respond(HttpStatusCode.ServiceUnavailable, DashboardErrorResponse("CHAT_UNAVAILABLE"))
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
+            try {
+                call.respond(service.recent(principal.context, limit).map(DashboardChatMessageResponse::from))
+            } catch (_: IllegalArgumentException) {
+                call.respond(HttpStatusCode.BadRequest, DashboardErrorResponse("INVALID_REQUEST"))
+            }
+        }
+
+        post("/chat/messages") {
+            val principal = call.principal(dependencies) ?: return@post
+            val service = dependencies.chatService
+                ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, DashboardErrorResponse("CHAT_UNAVAILABLE"))
+            val request = call.receive<DashboardChatRequest>()
+            try {
+                call.respond(service.send(principal.context, request.content).map(DashboardChatMessageResponse::from))
+            } catch (_: IllegalArgumentException) {
+                call.respond(HttpStatusCode.BadRequest, DashboardErrorResponse("INVALID_REQUEST"))
+            } catch (_: AiProviderException) {
+                call.respond(HttpStatusCode.BadGateway, DashboardErrorResponse("CHAT_UNAVAILABLE"))
+            } catch (_: AiConversationException) {
+                call.respond(HttpStatusCode.BadGateway, DashboardErrorResponse("CHAT_UNAVAILABLE"))
+            }
+        }
     }
 }
 
@@ -424,6 +457,24 @@ private fun BigDecimal.moneyString(): String = setScale(2).toPlainString()
 @Serializable data class DashboardLoginRequest(val name: String, val password: String)
 @Serializable data class DashboardSessionResponse(val name: String)
 @Serializable data class DashboardErrorResponse(val error: String)
+@Serializable data class DashboardChatRequest(val content: String)
+@Serializable data class DashboardChatMessageResponse(
+    val id: String,
+    val exchangeId: String,
+    val role: String,
+    val content: String,
+    val createdAt: String,
+) {
+    companion object {
+        fun from(message: DashboardChatMessage) = DashboardChatMessageResponse(
+            message.id.toString(),
+            message.exchangeId.toString(),
+            message.role.name,
+            message.content,
+            message.createdAt.toString(),
+        )
+    }
+}
 @Serializable data class PageResponse<T>(val items: List<T>, val page: Int, val pageSize: Int, val total: Int)
 @Serializable data class AccountMutationRequest(val name: String, val type: String)
 @Serializable data class CategoryMutationRequest(val name: String, val type: String, val expenseNature: String? = null)

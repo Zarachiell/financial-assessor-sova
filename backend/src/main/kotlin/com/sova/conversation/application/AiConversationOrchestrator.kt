@@ -45,6 +45,19 @@ data class ConversationMessage(
     val content: String,
 )
 
+data class AiConversationContext(
+    val householdId: UUID,
+    val userId: UUID,
+    val messageId: String,
+    val text: String,
+    val source: FinancialSource,
+    val attachmentId: UUID? = null,
+)
+
+fun interface AiTextConversation {
+    suspend fun respond(context: AiConversationContext): String
+}
+
 fun interface ConversationHistory {
     suspend fun recentMessages(
         userId: UUID,
@@ -70,16 +83,31 @@ class AiConversationOrchestrator(
     private val systemPersonality: String = loadPrompt("sova-system.md"),
     private val financialRules: String = loadPrompt("financial-rules.md"),
     private val toolCallingRules: String = loadPrompt("tool-calling.md"),
-) : WhatsappTextConversation {
+) : WhatsappTextConversation, AiTextConversation {
     init {
         require(maxToolRounds > 0) { "Maximum tool rounds must be positive" }
     }
 
-    override suspend fun respond(context: WhatsappConversationContext): String {
+    override suspend fun respond(context: WhatsappConversationContext): String = respond(
+        AiConversationContext(
+            householdId = context.householdId,
+            userId = context.userId,
+            messageId = context.inboundMessageSid,
+            text = context.text,
+            source = when (context.origin) {
+                WhatsappMessageOrigin.TEXT -> FinancialSource.WHATSAPP_TEXT
+                WhatsappMessageOrigin.AUDIO -> FinancialSource.WHATSAPP_AUDIO
+                WhatsappMessageOrigin.IMAGE -> FinancialSource.WHATSAPP_IMAGE
+            },
+            attachmentId = context.attachmentId,
+        ),
+    )
+
+    override suspend fun respond(context: AiConversationContext): String {
         val messages = mutableListOf(
             AiMessage(AiMessageRole.SYSTEM, systemPrompt(context)),
         )
-        history.recentMessages(context.userId, context.inboundMessageSid, HISTORY_LIMIT)
+        history.recentMessages(context.userId, context.messageId, HISTORY_LIMIT)
             .takeLast(HISTORY_LIMIT)
             .forEach { previous ->
                 messages += AiMessage(
@@ -94,12 +122,8 @@ class AiConversationOrchestrator(
 
         val executionContext = ToolExecutionContext(
             financialContext = FinancialContext(context.householdId, context.userId),
-            inboundMessageSid = context.inboundMessageSid,
-            source = when (context.origin) {
-                WhatsappMessageOrigin.TEXT -> FinancialSource.WHATSAPP_TEXT
-                WhatsappMessageOrigin.AUDIO -> FinancialSource.WHATSAPP_AUDIO
-                WhatsappMessageOrigin.IMAGE -> FinancialSource.WHATSAPP_IMAGE
-            },
+            inboundMessageSid = context.messageId,
+            source = context.source,
             attachmentId = context.attachmentId,
         )
         var completedToolRounds = 0
@@ -222,7 +246,7 @@ class AiConversationOrchestrator(
     private suspend fun complete(
         messages: List<AiMessage>,
         tools: List<AiToolDefinition>,
-        context: WhatsappConversationContext,
+        context: AiConversationContext,
         toolRound: Int,
     ): AiMessage {
         val startedAt = TimeSource.Monotonic.markNow()
@@ -267,7 +291,7 @@ class AiConversationOrchestrator(
 
     private fun localFallback(
         executions: List<CompletedToolExecution>,
-        context: WhatsappConversationContext,
+        context: AiConversationContext,
         cause: Exception,
     ): String {
         val providerStatus = (cause as? AiProviderException)?.failure?.name?.lowercase() ?: "invalid_final_response"
@@ -298,7 +322,7 @@ class AiConversationOrchestrator(
     private fun applySovaVoice(
         response: String,
         executions: List<CompletedToolExecution>,
-        context: WhatsappConversationContext,
+        context: AiConversationContext,
     ): String {
         if (executions.none { it.result.successful }) return response
         val familyRole = familyRolesByUserId[context.userId]
@@ -316,7 +340,7 @@ class AiConversationOrchestrator(
     private fun isGroundedAnalyticResponse(
         response: String,
         executions: List<CompletedToolExecution>,
-        context: WhatsappConversationContext,
+        context: AiConversationContext,
     ): Boolean {
         val analyticExecutions = executions.filter { it.name in ANALYTIC_TOOLS }
         if (analyticExecutions.isEmpty()) return true
@@ -388,7 +412,7 @@ class AiConversationOrchestrator(
             "- despesas previstas R$ $expectedExpenses = saldo projetado R$ $projectedBalance."
     }.getOrDefault(GENERIC_LOCAL_FALLBACK)
 
-    private fun systemPrompt(context: WhatsappConversationContext): String {
+    private fun systemPrompt(context: AiConversationContext): String {
         val today = LocalDate.now(clock.withZone(zoneId))
         val currentMonth = YearMonth.from(today)
         val previousMonth = currentMonth.minusMonths(1)

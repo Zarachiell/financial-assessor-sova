@@ -1,11 +1,14 @@
 package com.sova.delivery.http
 
 import com.sova.dashboard.application.DashboardQueryService
+import com.sova.dashboard.application.DashboardChatService
 import com.sova.dashboard.application.DashboardSessionAuthenticator
 import com.sova.dashboard.application.DashboardPeriod
 import com.sova.dashboard.application.DashboardTimelineFilters
 import com.sova.dashboard.application.DashboardTimelineStatus
 import com.sova.dashboard.application.DashboardUser
+import com.sova.dashboard.infrastructure.persistence.PostgresDashboardChatRepository
+import com.sova.conversation.application.AiTextConversation
 import com.sova.finance.application.CreateAccountCommand
 import com.sova.finance.application.CreateCashFlowEntryCommand
 import com.sova.finance.application.CreateCategoryCommand
@@ -78,6 +81,16 @@ class DashboardRoutesIntegrationTest {
                 clock,
             )
             val queries = DashboardQueryService(service, clock = clock)
+            val chatService = DashboardChatService(
+                AiTextConversation { aiContext ->
+                    assertEquals(contextA.householdId, aiContext.householdId)
+                    assertEquals(contextA.userId, aiContext.userId)
+                    assertEquals(FinancialSource.DASHBOARD, aiContext.source)
+                    "Seu resultado está positivo."
+                },
+                PostgresDashboardChatRepository(database),
+                clock,
+            )
             assertEquals(
                 1,
                 runBlocking {
@@ -99,6 +112,7 @@ class DashboardRoutesIntegrationTest {
                             service,
                             duration,
                             secureCookies = false,
+                            chatService = chatService,
                         ),
                     )
                 }
@@ -110,6 +124,19 @@ class DashboardRoutesIntegrationTest {
                 }
                 assertEquals(HttpStatusCode.OK, login.status)
                 val cookie = requireNotNull(login.headers[HttpHeaders.SetCookie]).substringBefore(';')
+
+                assertEquals(HttpStatusCode.Unauthorized, client.get("/api/dashboard/chat/messages").status)
+                val chat = client.post("/api/dashboard/chat/messages") {
+                    header(HttpHeaders.Cookie, cookie)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"content":"Como estão minhas finanças?"}""")
+                }
+                assertEquals(HttpStatusCode.OK, chat.status, chat.bodyAsText())
+                assertContains(chat.bodyAsText(), "Seu resultado está positivo.")
+                assertContains(chat.bodyAsText(), "\"role\":\"USER\"")
+                val chatHistory = client.get("/api/dashboard/chat/messages") { header(HttpHeaders.Cookie, cookie) }
+                assertEquals(HttpStatusCode.OK, chatHistory.status)
+                assertContains(chatHistory.bodyAsText(), "Como estão minhas finanças?")
 
                 val overview = client.get("/api/dashboard/overview?from=2026-08-01&to=2026-08-31") {
                     header(HttpHeaders.Cookie, cookie)

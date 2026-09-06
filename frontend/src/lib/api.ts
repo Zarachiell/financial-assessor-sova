@@ -10,6 +10,7 @@ export type TimelineItem = { entryId: string; occurrenceId: string; settlementId
 export type TimelineFilters = { type?: EntryType; status?: TimelineStatus; categoryId?: string; recurring?: boolean };
 export type Settlement = { id: string; cashFlowEntryId: string; description: string; plannedAmount: string; settledAmount: string; variance: string; scheduledOn: string; paidOn: string; settledAt: string };
 export type SettlementReceipt = { id: string; caption: string | null; contentType: string; sizeBytes: number; linkedAt: string; accessUrl: string };
+export type ChatMessage = { id: string; exchangeId: string; role: "USER" | "ASSISTANT"; content: string; createdAt: string };
 export type Page<T> = { items: T[]; page: number; pageSize: number; total: number };
 export type Overview = {
   from: string; to: string; currentBalance: string; projectedBalance: string;
@@ -62,4 +63,6 @@ export const api = {
   },
   settlements: (from: string, to: string) => request<Page<Settlement>>(`/settlements?from=${from}&to=${to}&pageSize=100`),
   receipts: (settlementId: string) => request<SettlementReceipt[]>(`/settlements/${settlementId}/receipts`),
+  chatMessages: () => request<ChatMessage[]>("/chat/messages?limit=50"),
+  sendChatMessage: (content: string) => request<ChatMessage[]>("/chat/messages", { method: "POST", body: JSON.stringify({ content }) }),
 };
