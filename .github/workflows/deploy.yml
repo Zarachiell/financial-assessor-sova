@@ -151,6 +151,15 @@ jobs:
             SOVA_AUDIO_MAX_ATTEMPTS
           )
 
+          if (( ${#SOVA_USER_A_DASHBOARD_PASSWORD} < 10 || ${#SOVA_USER_B_DASHBOARD_PASSWORD} < 10 )); then
+            echo "::error::Dashboard passwords must have at least 10 characters"
+            exit 1
+          fi
+          if (( ${#SOVA_DASHBOARD_SESSION_KEY} < 32 )); then
+            echo "::error::Dashboard session signing key must have at least 32 characters"
+            exit 1
+          fi
+
           for secret_name in "${required_secrets[@]}"; do
             write_secret "$secret_name"
           done

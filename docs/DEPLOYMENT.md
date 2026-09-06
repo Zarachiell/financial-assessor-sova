@@ -98,8 +98,8 @@ SOVA_USER_A_WHATSAPP=whatsapp:+55<ddd><numero>
 SOVA_USER_B_NAME=<nome>
 SOVA_USER_B_WHATSAPP=whatsapp:+55<ddd><numero>
 
-SOVA_USER_A_DASHBOARD_PASSWORD=<senha-forte-com-12-ou-mais-caracteres>
-SOVA_USER_B_DASHBOARD_PASSWORD=<senha-forte-com-12-ou-mais-caracteres>
+SOVA_USER_A_DASHBOARD_PASSWORD=<senha-forte-com-10-ou-mais-caracteres>
+SOVA_USER_B_DASHBOARD_PASSWORD=<senha-forte-com-10-ou-mais-caracteres>
 SOVA_DASHBOARD_SESSION_KEY=<segredo-aleatorio-com-32-ou-mais-caracteres>
 
 AI_PROVIDER=gemini

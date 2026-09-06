@@ -230,7 +230,7 @@ data class DashboardConfig(
     }
 
     private companion object {
-        const val MIN_PASSWORD_LENGTH = 12
+        const val MIN_PASSWORD_LENGTH = 10
         const val MIN_SIGNING_KEY_LENGTH = 32
         const val MAX_SESSION_HOURS = 168
     }

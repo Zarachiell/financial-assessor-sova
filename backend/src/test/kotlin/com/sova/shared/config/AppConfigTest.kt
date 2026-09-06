@@ -76,6 +76,23 @@ class AppConfigTest {
         assertEquals(true, configured.enabled)
         assertEquals(48, configured.sessionDurationHours)
         assertEquals(2, configured.userPasswords?.size)
+        val minimumLength = AppConfig.fromEnvironment(
+            requiredEnvironment + mapOf(
+                "SOVA_USER_A_DASHBOARD_PASSWORD" to "1234567890",
+                "SOVA_USER_B_DASHBOARD_PASSWORD" to "abcdefghij",
+                "SOVA_DASHBOARD_SESSION_KEY" to "a-session-signing-key-with-32-bytes",
+            ),
+        ).dashboard
+        assertEquals(true, minimumLength.enabled)
+        assertFailsWith<IllegalArgumentException> {
+            AppConfig.fromEnvironment(
+                requiredEnvironment + mapOf(
+                    "SOVA_USER_A_DASHBOARD_PASSWORD" to "123456789",
+                    "SOVA_USER_B_DASHBOARD_PASSWORD" to "abcdefghij",
+                    "SOVA_DASHBOARD_SESSION_KEY" to "a-session-signing-key-with-32-bytes",
+                ),
+            )
+        }
         assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(
                 requiredEnvironment + ("SOVA_USER_A_DASHBOARD_PASSWORD" to "a-strong-password"),
