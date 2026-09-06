@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, Catalog, TimelineItem } from "@/lib/api";
-import { brl, DashboardSkeleton, ReceiptLinks, TimelineView } from "./page";
+import { api, Catalog, TimelineItem, Transaction } from "@/lib/api";
+import { brl, ConfirmDeleteDialog, DashboardSkeleton, ReceiptLinks, RecordsTable, TimelineView } from "./page";
 
 const catalog: Catalog = {
   accounts: [],
@@ -77,5 +77,29 @@ describe("dashboard financial presentation", () => {
     render(<ReceiptLinks settlementId="s1" />);
     fireEvent.click(screen.getByRole("button", { name: "Comprovantes" }));
     expect(await screen.findByText("Falha ao carregar")).toBeInTheDocument();
+  });
+
+  it("selects multiple records and requests one batch confirmation", () => {
+    const onRequestDelete = vi.fn();
+    const rows: Transaction[] = [
+      { id: "t1", accountId: "a1", categoryId: "category-1", type: "EXPENSE", amount: "10.00", description: "Café", occurredOn: "2026-09-01", source: "MANUAL" },
+      { id: "t2", accountId: "a1", categoryId: "category-1", type: "EXPENSE", amount: "20.00", description: "Almoço", occurredOn: "2026-09-02", source: "MANUAL" },
+    ];
+    render(<RecordsTable kind="transaction" rows={rows} catalog={catalog} onEdit={vi.fn()} onRequestDelete={onRequestDelete} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Selecionar todos os registros" }));
+    fireEvent.click(screen.getByRole("button", { name: "Excluir selecionados (2)" }));
+    expect(onRequestDelete).toHaveBeenCalledWith([
+      { kind: "transaction", id: "t1", description: "Café" },
+      { kind: "transaction", id: "t2", description: "Almoço" },
+    ]);
+  });
+
+  it("uses an accessible confirmation dialog instead of the browser confirm", () => {
+    const onConfirm = vi.fn();
+    render(<ConfirmDeleteDialog targets={[{ kind: "transaction", id: "t1", description: "Mercado" }]} busy={false} onCancel={vi.fn()} onConfirm={onConfirm} />);
+    expect(screen.getByRole("dialog", { name: "Excluir este registro?" })).toBeInTheDocument();
+    expect(screen.getByText("Mercado")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Excluir registro" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
   });
 });
