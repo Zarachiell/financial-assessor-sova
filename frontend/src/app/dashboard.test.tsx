@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, Catalog, TimelineItem, Transaction } from "@/lib/api";
-import { brl, ChatView, ConfirmDeleteDialog, DashboardSkeleton, ReceiptLinks, RecordsTable, TimelineView } from "./page";
+import { brl, ChatView, ConfirmDeleteDialog, DashboardSkeleton, ReceiptLinks, RecordEditor, RecordsTable, TimelineView } from "./page";
 
 const catalog: Catalog = {
   accounts: [],
@@ -114,5 +114,26 @@ describe("dashboard financial presentation", () => {
     fireEvent.change(screen.getByLabelText("Mensagem para o Sova"), { target: { value: "Onde mais gastamos?" } });
     fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("Onde mais gastamos?"));
+  });
+
+  it("creates a monthly recurrence from the unified new record form", async () => {
+    const saveCashFlow = vi.spyOn(api, "saveCashFlow").mockResolvedValue({} as never);
+    const completeCatalog: Catalog = {
+      accounts: [{ id: "account-1", name: "Conta", type: "CHECKING", active: true }],
+      categories: catalog.categories,
+    };
+    render(<RecordEditor kind="transaction" catalog={completeCatalog} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Descrição"), { target: { value: "Aluguel" } });
+    fireEvent.change(screen.getByLabelText("Valor"), { target: { value: "1500" } });
+    fireEvent.change(screen.getByLabelText("Data"), { target: { value: "2026-09-10" } });
+    fireEvent.change(screen.getByLabelText("Conta"), { target: { value: "account-1" } });
+    fireEvent.change(screen.getByLabelText("Categoria"), { target: { value: "category-1" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /É recorrente/ }));
+    fireEvent.submit(screen.getByRole("button", { name: "Salvar registro" }).closest("form")!);
+
+    await waitFor(() => expect(saveCashFlow).toHaveBeenCalledWith(expect.objectContaining({
+      type: "EXPENSE", recurrence: "MONTHLY", startDate: "2026-09-10", dayOfMonth: 10,
+    }), undefined));
   });
 });

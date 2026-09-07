@@ -601,6 +601,8 @@ A visão patrimonial separa deterministicamente:
 
 A timeline consolidada distingue previsto e realizado e deriva no backend os estados `PENDING`, `SETTLED` e `OVERDUE`. Seus filtros de período, tipo, status, categoria e recorrência são enviados à API. Transações e entradas de fluxo de caixa possuem criação, edição e exclusão pelas mesmas regras de aplicação usadas pelo WhatsApp.
 
+O formulário de novo registro é unificado para receitas e despesas. A opção booleana `É recorrente` cria uma entrada mensal de fluxo de caixa, usando o dia da data inicial como dia da recorrência; quando desmarcada, o registro continua sendo uma transação realizada. A edição preserva o tipo original para não converter nem duplicar registros existentes.
+
 A implementação inicial do dashboard não exigiu migration porque o tipo de conta `INVESTMENT`, transações, fluxo de caixa, settlements e comprovantes já existiam no schema. O chat adicionou a migration `V12__dashboard_chat.sql` para o histórico web. O deploy adicionou apenas o container `sova-web` ao Compose e o roteamento correspondente no Caddy.
 
 ---
